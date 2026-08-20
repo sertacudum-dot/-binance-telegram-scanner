@@ -5,7 +5,7 @@ import urllib.parse
 import statistics
 from datetime import datetime, timezone
 
-BINANCE = "https://api.binance.com"
+BINANCE = "https://data-api.binance.vision"
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
