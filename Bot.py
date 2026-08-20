@@ -15,7 +15,6 @@ STABLECOINS = {
 
 
 def get(url):
-
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0"}
@@ -26,13 +25,11 @@ def get(url):
 
 
 def get_chat_id():
-
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
         data = get(url)
 
         for update in reversed(data.get("result", [])):
-
             message = update.get("message")
 
             if message and message.get("chat"):
@@ -45,7 +42,6 @@ def get_chat_id():
 
 
 def send_telegram(message):
-
     chat_id = get_chat_id()
 
     if not chat_id:
@@ -116,9 +112,7 @@ def rsi(values, period=14):
     losses = []
 
     for i in range(1, len(values)):
-
         change = values[i] - values[i - 1]
-
         gains.append(max(change, 0))
         losses.append(max(-change, 0))
 
@@ -126,7 +120,6 @@ def rsi(values, period=14):
     avg_loss = sum(losses[:period]) / period
 
     for i in range(period, len(gains)):
-
         avg_gain = (
             avg_gain * (period - 1)
             + gains[i]
@@ -150,7 +143,6 @@ def stoch_rsi(values, period=14):
     rsi_values = []
 
     for i in range(period, len(values)):
-
         rsi_values.append(
             rsi(values[:i + 1], period)
         )
@@ -168,8 +160,7 @@ def stoch_rsi(values, period=14):
 
     return (
         (rsi_values[-1] - lowest)
-        /
-        (highest - lowest)
+        / (highest - lowest)
     ) * 100
 
 
@@ -181,7 +172,6 @@ def macd(values):
     macd_values = []
 
     for i in range(26, len(values)):
-
         e12 = ema(values[:i + 1], 12)
         e26 = ema(values[:i + 1], 26)
 
@@ -252,9 +242,10 @@ def supertrend(high, low, close, period=10, multiplier=3):
 
     hl2 = (high[-1] + low[-1]) / 2
 
+    upper_band = hl2 + multiplier * atr
     lower_band = hl2 - multiplier * atr
 
-    return close[-1] > lower_band
+    return close[-1] > lower_band and close[-1] > upper_band
 
 
 def tdi(values):
@@ -265,6 +256,28 @@ def tdi(values):
     signal = current * 0.7 + previous * 0.3
 
     return current, signal
+
+
+def atr_value(high, low, close, period=14):
+
+    if len(close) < period + 1:
+        return 0
+
+    trs = []
+
+    start = len(close) - period
+
+    for i in range(start, len(close)):
+
+        tr = max(
+            high[i] - low[i],
+            abs(high[i] - close[i - 1]),
+            abs(low[i] - close[i - 1])
+        )
+
+        trs.append(tr)
+
+    return sum(trs) / len(trs)
 
 
 def price_format(value):
@@ -306,74 +319,15 @@ def analyze(symbol):
 
         price = close15[-1]
 
-        score = 0
-
-        reasons = []
-        warnings = []
-
-        # ================================================
-        # RSI
-        # ================================================
+        # ==================================================
+        # INDICATORS
+        # ==================================================
 
         rsi15 = rsi(close15)
         rsi1h = rsi(close1h)
         rsi4h = rsi(close4h)
 
-        if 50 <= rsi15 <= 65:
-            score += 8
-            reasons.append("RSI ideal")
-
-        elif 65 < rsi15 <= 70:
-            score += 4
-
-        elif rsi15 > 70:
-            score -= 8
-            warnings.append("RSI yüksek")
-
-        elif rsi15 < 45:
-            score -= 6
-            warnings.append("RSI zayıf")
-
-
-        if 50 <= rsi1h <= 65:
-            score += 8
-            reasons.append("1h RSI")
-
-        elif 65 < rsi1h <= 70:
-            score += 3
-
-        elif 70 < rsi1h <= 75:
-            score -= 8
-            warnings.append("1h RSI yüksek")
-
-        elif rsi1h > 75:
-            score -= 20
-            warnings.append("1h aşırı alım")
-
-        elif rsi1h < 40:
-            score -= 10
-            warnings.append("1h RSI zayıf")
-
-
-        if 45 <= rsi4h <= 65:
-            score += 8
-            reasons.append("4h RSI")
-
-        elif 65 < rsi4h <= 70:
-            score += 3
-
-        elif rsi4h > 70:
-            score -= 7
-            warnings.append("4h RSI yüksek")
-
-        elif rsi4h < 40:
-            score -= 15
-            warnings.append("4h RSI zayıf")
-
-
-        # ================================================
-        # EMA
-        # ================================================
+        stoch = stoch_rsi(close15)
 
         ema9 = ema(close15, 9)
         ema21 = ema(close15, 21)
@@ -382,101 +336,12 @@ def analyze(symbol):
         ema21_4h = ema(close4h, 21)
         ema50_4h = ema(close4h, 50)
 
-        if price > ema9 and ema9 > ema21:
-            score += 8
-            reasons.append("EMA9/21")
-
-        elif price < ema21:
-            score -= 5
-
-
-        if price > ema50:
-            score += 5
-            reasons.append("EMA50")
-
-
-        if price > ema21_4h and ema21_4h > ema50_4h:
-            score += 10
-            reasons.append("4h trend")
-
-        elif price > ema50_4h:
-            score += 3
-            reasons.append("4h EMA50")
-
-        else:
-            score -= 8
-            warnings.append("4h zayıf")
-
-
-        # ================================================
-        # MACD
-        # ================================================
-
         macd15, signal15, hist15 = macd(close15)
         macd1h, signal1h, hist1h = macd(close1h)
 
-        if macd15 > signal15 and hist15 > 0:
-            score += 7
-            reasons.append("MACD")
-
-        if macd1h > signal1h and hist1h > 0:
-            score += 9
-            reasons.append("1h MACD")
-
-
-        # ================================================
-        # STOCH RSI
-        # ================================================
-
-        stoch = stoch_rsi(close15)
-
-        if 20 <= stoch <= 80:
-            score += 7
-            reasons.append("Stoch RSI")
-
-        elif 80 < stoch <= 90:
-            score -= 3
-            warnings.append("Stoch RSI yüksek")
-
-        elif stoch > 90:
-            score -= 18
-            warnings.append("Stoch RSI çok yüksek")
-
-        elif stoch < 20:
-            score += 2
-
-
-        # ================================================
-        # BOLLINGER
-        # ================================================
-
         upper, middle, lower = bollinger(close15)
 
-        if middle < price < upper:
-            score += 4
-            reasons.append("Bollinger")
-
-        elif price > upper:
-            score -= 5
-            warnings.append("BB üstü")
-
-
-        # ================================================
-        # OBV
-        # ================================================
-
         obv_values = obv(close15, vol15)
-
-        if len(obv_values) >= 6:
-
-            if obv_values[-1] > obv_values[-5]:
-                score += 4
-                reasons.append("OBV")
-
-
-        # ================================================
-        # SUPERTREND
-        # ================================================
 
         st15 = supertrend(
             high15,
@@ -490,53 +355,20 @@ def analyze(symbol):
             close1h
         )
 
-        if st15:
-            score += 4
-            reasons.append("Supertrend")
-
-        if st1h:
-            score += 4
-            reasons.append("1h Supertrend")
-
-
-        # ================================================
-        # TDI
-        # ================================================
-
         tdi_rsi, tdi_signal = tdi(close15)
 
-        if (
-            tdi_rsi > tdi_signal
-            and 50 < tdi_rsi < 70
-        ):
-            score += 4
-            reasons.append("TDI")
+        atr = atr_value(
+            high15,
+            low15,
+            close15
+        )
 
-
-        # ================================================
-        # MOMENTUM
-        # ================================================
+        if atr <= 0:
+            return None
 
         momentum = (
             (price / close15[-5]) - 1
         ) * 100
-
-        if 0.5 <= momentum <= 4:
-            score += 6
-            reasons.append("Momentum")
-
-        elif momentum < 0:
-            score -= 12
-            warnings.append("Momentum negatif")
-
-        elif momentum > 7:
-            score -= 8
-            warnings.append("Aşırı hızlı yükseliş")
-
-
-        # ================================================
-        # VOLUME
-        # ================================================
 
         avg_volume = sum(
             vol15[-21:-1]
@@ -549,82 +381,405 @@ def analyze(symbol):
             vol15[-1] / avg_volume
         )
 
+        # ==================================================
+        # LONG SCORE
+        # ==================================================
 
-        # KRİTİK:
-        # 1.2x altında AL sinyali yok.
+        long_score = 0
+        long_reasons = []
+        long_warnings = []
 
-        if volume_ratio < 1.2:
-            return None
+        # RSI 15m
 
+        if 50 <= rsi15 <= 65:
+            long_score += 8
+            long_reasons.append("RSI ideal")
 
-        if volume_ratio >= 3:
-            score += 12
-            reasons.append(
-                f"Hacim x{volume_ratio:.1f}"
-            )
+        elif 65 < rsi15 <= 70:
+            long_score += 4
 
-        elif volume_ratio >= 2:
-            score += 10
-            reasons.append(
-                f"Hacim x{volume_ratio:.1f}"
-            )
+        elif rsi15 > 70:
+            long_score -= 8
+            long_warnings.append("RSI yüksek")
 
-        elif volume_ratio >= 1.5:
-            score += 7
-            reasons.append(
-                f"Hacim x{volume_ratio:.1f}"
-            )
+        elif rsi15 < 45:
+            long_score -= 8
+            long_warnings.append("RSI zayıf")
+
+        # RSI 1h
+
+        if 50 <= rsi1h <= 65:
+            long_score += 8
+            long_reasons.append("1h RSI")
+
+        elif 65 < rsi1h <= 70:
+            long_score += 3
+
+        elif 70 < rsi1h <= 75:
+            long_score -= 8
+            long_warnings.append("1h RSI yüksek")
+
+        elif rsi1h > 75:
+            long_score -= 20
+            long_warnings.append("1h aşırı alım")
+
+        elif rsi1h < 40:
+            long_score -= 10
+            long_warnings.append("1h RSI zayıf")
+
+        # RSI 4h
+
+        if 45 <= rsi4h <= 65:
+            long_score += 8
+            long_reasons.append("4h RSI")
+
+        elif 65 < rsi4h <= 70:
+            long_score += 3
+
+        elif rsi4h > 70:
+            long_score -= 7
+            long_warnings.append("4h RSI yüksek")
+
+        elif rsi4h < 40:
+            long_score -= 15
+            long_warnings.append("4h RSI zayıf")
+
+        # EMA
+
+        if price > ema9 > ema21:
+            long_score += 8
+            long_reasons.append("EMA9/21")
+
+        if price > ema50:
+            long_score += 5
+            long_reasons.append("EMA50")
+
+        if price > ema21_4h > ema50_4h:
+            long_score += 10
+            long_reasons.append("4h trend")
+
+        elif price > ema50_4h:
+            long_score += 3
+            long_reasons.append("4h EMA50")
 
         else:
-            score += 2
-            warnings.append("Hacim düşük")
+            long_score -= 8
+            long_warnings.append("4h zayıf")
 
+        # MACD
 
-        # ================================================
+        if macd15 > signal15 and hist15 > 0:
+            long_score += 7
+            long_reasons.append("MACD")
+
+        if macd1h > signal1h and hist1h > 0:
+            long_score += 9
+            long_reasons.append("1h MACD")
+
+        # Stoch RSI
+
+        if 20 <= stoch <= 80:
+            long_score += 7
+            long_reasons.append("Stoch RSI")
+
+        elif 80 < stoch <= 90:
+            long_score -= 3
+            long_warnings.append("Stoch RSI yüksek")
+
+        elif stoch > 90:
+            long_score -= 18
+            long_warnings.append("Stoch RSI çok yüksek")
+
+        # Bollinger
+
+        if middle < price < upper:
+            long_score += 4
+            long_reasons.append("Bollinger")
+
+        elif price > upper:
+            long_score -= 5
+            long_warnings.append("BB üstü")
+
+        # OBV
+
+        if len(obv_values) >= 6:
+            if obv_values[-1] > obv_values[-5]:
+                long_score += 4
+                long_reasons.append("OBV")
+
+        # Supertrend
+
+        if st15:
+            long_score += 4
+            long_reasons.append("Supertrend")
+
+        if st1h:
+            long_score += 4
+            long_reasons.append("1h Supertrend")
+
+        # TDI
+
+        if tdi_rsi > tdi_signal and 50 < tdi_rsi < 70:
+            long_score += 4
+            long_reasons.append("TDI")
+
+        # Momentum
+
+        if 0.5 <= momentum <= 4:
+            long_score += 6
+            long_reasons.append("Momentum")
+
+        elif momentum < 0:
+            long_score -= 12
+            long_warnings.append("Momentum negatif")
+
+        elif momentum > 7:
+            long_score -= 8
+            long_warnings.append("Momentum çok hızlı")
+
+        # Volume
+
+        if volume_ratio >= 3:
+            long_score += 12
+            long_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        elif volume_ratio >= 2:
+            long_score += 10
+            long_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        elif volume_ratio >= 1.5:
+            long_score += 7
+            long_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        else:
+            long_score += 2
+            long_warnings.append("Hacim düşük")
+
+        # ==================================================
+        # SHORT SCORE
+        # ==================================================
+
+        short_score = 0
+        short_reasons = []
+        short_warnings = []
+
+        # RSI 15m
+
+        if 35 <= rsi15 <= 50:
+            short_score += 8
+            short_reasons.append("RSI zayıf")
+
+        elif 30 <= rsi15 < 35:
+            short_score += 4
+
+        elif rsi15 < 30:
+            short_score -= 10
+            short_warnings.append("RSI aşırı düşük")
+
+        elif rsi15 > 65:
+            short_score -= 7
+            short_warnings.append("RSI güçlü")
+
+        # RSI 1h
+
+        if 35 <= rsi1h <= 50:
+            short_score += 8
+            short_reasons.append("1h RSI")
+
+        elif rsi1h < 30:
+            short_score -= 15
+            short_warnings.append("1h aşırı düşük")
+
+        elif rsi1h > 65:
+            short_score += 4
+            short_reasons.append("1h RSI yüksek")
+
+        elif rsi1h > 75:
+            short_score -= 12
+            short_warnings.append("1h aşırı alım")
+
+        # RSI 4h
+
+        if 35 <= rsi4h <= 55:
+            short_score += 8
+            short_reasons.append("4h RSI")
+
+        elif rsi4h < 35:
+            short_score -= 10
+            short_warnings.append("4h RSI çok düşük")
+
+        elif rsi4h > 65:
+            short_score -= 6
+            short_warnings.append("4h RSI güçlü")
+
+        # EMA
+
+        if price < ema9 < ema21:
+            short_score += 8
+            short_reasons.append("EMA9/21")
+
+        if price < ema50:
+            short_score += 6
+            short_reasons.append("EMA50")
+
+        if price < ema21_4h < ema50_4h:
+            short_score += 10
+            short_reasons.append("4h düşüş trendi")
+
+        elif price < ema50_4h:
+            short_score += 4
+            short_reasons.append("4h EMA50")
+
+        else:
+            short_score -= 8
+            short_warnings.append("4h güçlü")
+
+        # MACD
+
+        if macd15 < signal15 and hist15 < 0:
+            short_score += 7
+            short_reasons.append("MACD")
+
+        if macd1h < signal1h and hist1h < 0:
+            short_score += 9
+            short_reasons.append("1h MACD")
+
+        # Stoch RSI
+
+        if 20 <= stoch <= 80:
+            short_score += 7
+            short_reasons.append("Stoch RSI")
+
+        elif stoch < 20:
+            short_score -= 3
+            short_warnings.append("Stoch RSI düşük")
+
+        elif stoch > 90:
+            short_score += 3
+            short_reasons.append("Stoch RSI dönüş bölgesi")
+
+        # Bollinger
+
+        if lower < price < middle:
+            short_score += 4
+            short_reasons.append("Bollinger")
+
+        elif price < lower:
+            short_score -= 5
+            short_warnings.append("BB altı")
+
+        # OBV
+
+        if len(obv_values) >= 6:
+            if obv_values[-1] < obv_values[-5]:
+                short_score += 4
+                short_reasons.append("OBV")
+
+        # Supertrend
+
+        if not st15:
+            short_score += 4
+            short_reasons.append("Supertrend")
+
+        if not st1h:
+            short_score += 4
+            short_reasons.append("1h Supertrend")
+
+        # TDI
+
+        if tdi_rsi < tdi_signal and 30 < tdi_rsi < 55:
+            short_score += 4
+            short_reasons.append("TDI")
+
+        # Momentum
+
+        if -4 <= momentum <= -0.5:
+            short_score += 6
+            short_reasons.append("Momentum")
+
+        elif momentum > 0:
+            short_score -= 12
+            short_warnings.append("Momentum pozitif")
+
+        elif momentum < -7:
+            short_score -= 8
+            short_warnings.append("Aşırı hızlı düşüş")
+
+        # Volume
+
+        if volume_ratio >= 3:
+            short_score += 12
+            short_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        elif volume_ratio >= 2:
+            short_score += 10
+            short_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        elif volume_ratio >= 1.5:
+            short_score += 7
+            short_reasons.append(f"Hacim x{volume_ratio:.1f}")
+
+        else:
+            short_score += 2
+            short_warnings.append("Hacim düşük")
+
+        # ==================================================
         # HARD FILTERS
-        # ================================================
+        # ==================================================
 
-        # Aşırı alım
+        long_valid = True
+        short_valid = True
 
-        if stoch > 90:
-            return None
+        # Hacim filtresi
+        if volume_ratio < 1.2:
+            long_valid = False
+            short_valid = False
 
-        if rsi1h > 75:
-            return None
+        # LONG hard filters
+        if stoch > 92:
+            long_valid = False
 
-        if rsi4h < 40:
-            return None
+        if rsi1h > 78:
+            long_valid = False
 
         if momentum < 0:
-            return None
+            long_valid = False
 
+        if rsi4h < 40 and price < ema50_4h:
+            long_valid = False
 
-        # Çok zayıf 4H yapı
+        # SHORT hard filters
+        if stoch < 8:
+            short_valid = False
 
-        if (
-            rsi4h < 43
-            and price < ema50_4h
-        ):
-            return None
+        if rsi1h < 25:
+            short_valid = False
 
+        if momentum > 0:
+            short_valid = False
 
-        # ================================================
-        # SCORE NORMALIZATION
-        # ================================================
+        if rsi4h > 70 and price > ema50_4h:
+            short_valid = False
 
-        score = max(
+        # ==================================================
+        # NORMALIZE
+        # ==================================================
+
+        long_score = max(
             0,
-            min(100, score)
+            min(100, long_score)
         )
 
+        short_score = max(
+            0,
+            min(100, short_score)
+        )
 
-        # ================================================
-        # SIGNAL
-        # ================================================
+        # ==================================================
+        # LONG SIGNAL
+        # ==================================================
 
-        # Güçlü AL için ekstra şartlar
-
-        strong_conditions = [
+        long_conditions = [
             volume_ratio >= 1.5,
             momentum >= 0.5,
             50 <= rsi15 <= 68,
@@ -632,111 +787,147 @@ def analyze(symbol):
             rsi4h >= 45,
             20 <= stoch <= 80,
             macd1h > signal1h,
-            price > ema9 > ema21,
+            price > ema9 > ema21
         ]
 
-        strong_count = sum(
-            strong_conditions
-        )
+        long_count = sum(long_conditions)
 
+        if (
+            long_valid
+            and long_score >= 82
+            and long_count >= 7
+        ):
+            long_signal = "🟢 GÜÇLÜ AL"
 
-        if score >= 82 and strong_count >= 7:
+        elif (
+            long_valid
+            and long_score >= 72
+            and long_count >= 5
+        ):
+            long_signal = "🟢 AL ADAYI"
 
-            signal = "🟢 GÜÇLÜ AL"
-
-        elif score >= 72 and strong_count >= 5:
-
-            signal = "🟢 AL ADAYI"
-
-        elif score >= 65:
-
-            signal = "🟡 İZLE"
+        elif long_valid and long_score >= 65:
+            long_signal = "🟡 İZLE"
 
         else:
+            long_signal = None
 
-            signal = "⚪ ZAYIF"
-
-
-        # Güçlü AL güvenlik filtresi
-
-        if signal == "🟢 GÜÇLÜ AL":
+        if long_signal == "🟢 GÜÇLÜ AL":
 
             if volume_ratio < 1.5:
-                signal = "🟢 AL ADAYI"
+                long_signal = "🟢 AL ADAYI"
 
             if stoch > 80:
-                signal = "🟢 AL ADAYI"
+                long_signal = "🟢 AL ADAYI"
 
             if rsi1h > 70:
-                signal = "🟢 AL ADAYI"
+                long_signal = "🟢 AL ADAYI"
 
             if rsi4h < 45:
-                signal = "🟢 AL ADAYI"
+                long_signal = "🟢 AL ADAYI"
 
+        # ==================================================
+        # SHORT SIGNAL
+        # ==================================================
 
-        # ================================================
-        # ATR / SL / TP
-        # ================================================
+        short_conditions = [
+            volume_ratio >= 1.5,
+            momentum <= -0.5,
+            32 <= rsi15 <= 50,
+            30 <= rsi1h <= 55,
+            rsi4h <= 55,
+            20 <= stoch <= 80,
+            macd1h < signal1h,
+            price < ema9 < ema21
+        ]
 
-        true_ranges = []
+        short_count = sum(short_conditions)
 
-        for i in range(
-            len(close15) - 14,
-            len(close15)
+        if (
+            short_valid
+            and short_score >= 82
+            and short_count >= 7
         ):
+            short_signal = "🔴 GÜÇLÜ SAT / SHORT"
 
-            tr = max(
-                high15[i] - low15[i],
-                abs(
-                    high15[i]
-                    - close15[i - 1]
-                ),
-                abs(
-                    low15[i]
-                    - close15[i - 1]
-                )
-            )
+        elif (
+            short_valid
+            and short_score >= 72
+            and short_count >= 5
+        ):
+            short_signal = "🔴 SHORT ADAYI"
 
-            true_ranges.append(tr)
+        elif short_valid and short_score >= 65:
+            short_signal = "🟠 SHORT İZLE"
 
+        else:
+            short_signal = None
 
-        atr = sum(
-            true_ranges
-        ) / len(true_ranges)
+        if short_signal == "🔴 GÜÇLÜ SAT / SHORT":
 
+            if volume_ratio < 1.5:
+                short_signal = "🔴 SHORT ADAYI"
+
+            if stoch < 20:
+                short_signal = "🔴 SHORT ADAYI"
+
+            if rsi1h < 30:
+                short_signal = "🔴 SHORT ADAYI"
+
+            if rsi4h > 55:
+                short_signal = "🔴 SHORT ADAYI"
+
+        # ==================================================
+        # ATR TARGETS
+        # ==================================================
 
         risk = atr * 1.5
 
-        sl = price - risk
+        # LONG
 
-        tp1 = price + risk * 1.0
-        tp2 = price + risk * 1.5
-        tp3 = price + risk * 2.0
+        long_sl = price - risk
+        long_tp1 = price + risk
+        long_tp2 = price + risk * 1.5
+        long_tp3 = price + risk * 2
 
+        # SHORT
 
-        # ================================================
-        # RESULT
-        # ================================================
+        short_sl = price + risk
+        short_tp1 = price - risk
+        short_tp2 = price - risk * 1.5
+        short_tp3 = price - risk * 2
 
         return {
             "symbol": symbol,
             "price": price,
-            "score": score,
-            "signal": signal,
+
+            "long_score": long_score,
+            "long_signal": long_signal,
+            "long_reasons": long_reasons,
+            "long_warnings": long_warnings,
+
+            "short_score": short_score,
+            "short_signal": short_signal,
+            "short_reasons": short_reasons,
+            "short_warnings": short_warnings,
+
             "rsi15": rsi15,
             "rsi1h": rsi1h,
             "rsi4h": rsi4h,
             "stoch": stoch,
             "volume": volume_ratio,
             "momentum": momentum,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3,
-            "reasons": reasons,
-            "warnings": warnings
-        }
 
+            "long_sl": long_sl,
+            "long_tp1": long_tp1,
+            "long_tp2": long_tp2,
+            "long_tp3": long_tp3,
+
+            "short_sl": short_sl,
+            "short_tp1": short_tp1,
+            "short_tp2": short_tp2,
+            "short_tp3": short_tp3
+        }
 
     except Exception as e:
 
@@ -750,8 +941,7 @@ def analyze(symbol):
 def main():
 
     print(
-        "🚀 KALİBRE EDİLMİŞ "
-        "BINANCE SCANNER BAŞLADI..."
+        "🚀 LONG + SHORT BINANCE SCANNER BAŞLADI..."
     )
 
     tickers = get(
@@ -800,7 +990,6 @@ def main():
         except Exception:
             continue
 
-
     candidates.sort(
         key=lambda x: x[1],
         reverse=True
@@ -811,7 +1000,6 @@ def main():
     print(
         f"{len(candidates)} coin analiz edilecek."
     )
-
 
     results = []
 
@@ -826,21 +1014,39 @@ def main():
         if result:
             results.append(result)
 
+    # ==================================================
+    # LONG LIST
+    # ==================================================
 
-    results.sort(
-        key=lambda x: x["score"],
+    long_results = [
+        x for x in results
+        if x["long_signal"] is not None
+        and x["long_score"] >= 65
+    ]
+
+    long_results.sort(
+        key=lambda x: x["long_score"],
         reverse=True
     )
 
+    long_results = long_results[:5]
 
-    tradable = [
+    # ==================================================
+    # SHORT LIST
+    # ==================================================
+
+    short_results = [
         x for x in results
-        if x["score"] >= 65
+        if x["short_signal"] is not None
+        and x["short_score"] >= 65
     ]
 
+    short_results.sort(
+        key=lambda x: x["short_score"],
+        reverse=True
+    )
 
-    tradable = tradable[:5]
-
+    short_results = short_results[:5]
 
     now = datetime.now(
         timezone.utc
@@ -848,10 +1054,9 @@ def main():
         "%d.%m.%Y %H:%M UTC"
     )
 
-
     message = (
-        "🚨 KALİBRE EDİLMİŞ "
-        "BINANCE AL TARAMASI\n\n"
+        "🚨 GELİŞMİŞ BINANCE "
+        "LONG + SHORT TARAMASI\n\n"
 
         f"🕐 {now}\n"
 
@@ -868,24 +1073,23 @@ def main():
         "━━━━━━━━━━━━━━━━━━\n\n"
     )
 
+    # ==================================================
+    # LONG
+    # ==================================================
 
-    if not tradable:
+    message += "📈 LONG FIRSATLARI\n\n"
+
+    if not long_results:
 
         message += (
-            "🟡 ŞU ANDA TRADE EDİLEBİLİR "
-            "SİNYAL YOK.\n\n"
-
-            "Bot zayıf veya aşırı alım "
-            "sinyallerini filtreledi.\n\n"
-
-            "⏳ Bir sonraki tarama bekleniyor."
+            "🟡 Şu anda trade edilebilir "
+            "LONG sinyali yok.\n\n"
         )
-
 
     else:
 
         for i, coin in enumerate(
-            tradable,
+            long_results,
             1
         ):
 
@@ -894,19 +1098,19 @@ def main():
                 f"🏆 {i}. "
                 f"{coin['symbol']}\n"
 
-                f"{coin['signal']}\n"
+                f"{coin['long_signal']}\n"
 
                 f"⭐ Sinyal gücü: "
-                f"{coin['score']}/100\n\n"
+                f"{coin['long_score']}/100\n\n"
 
                 f"💰 Giriş: "
                 f"{price_format(coin['price'])}\n"
 
                 f"RSI: "
-                f"{coin['rsi15']:.1f} "
-                f"| 1h: "
-                f"{coin['rsi1h']:.1f} "
-                f"| 4h: "
+                f"{coin['rsi15']:.1f}"
+                f" | 1h: "
+                f"{coin['rsi1h']:.1f}"
+                f" | 4h: "
                 f"{coin['rsi4h']:.1f}\n"
 
                 f"🔥 Hacim: "
@@ -919,38 +1123,118 @@ def main():
                 f"{coin['stoch']:.1f}\n"
 
                 f"🧠 Pozitif: "
-                f"{', '.join(coin['reasons'][:8])}\n"
+                f"{', '.join(coin['long_reasons'][:8])}\n"
             )
 
-
-            if coin["warnings"]:
+            if coin["long_warnings"]:
 
                 message += (
                     "⚠️ "
                     + ", ".join(
-                        coin["warnings"][:4]
+                        coin["long_warnings"][:4]
                     )
                     + "\n"
                 )
 
-
             message += (
 
                 f"\n🛑 SL: "
-                f"{price_format(coin['sl'])}\n"
+                f"{price_format(coin['long_sl'])}\n"
 
                 f"🎯 TP1: "
-                f"{price_format(coin['tp1'])}\n"
+                f"{price_format(coin['long_tp1'])}\n"
 
                 f"🎯 TP2: "
-                f"{price_format(coin['tp2'])}\n"
+                f"{price_format(coin['long_tp2'])}\n"
 
                 f"🎯 TP3: "
-                f"{price_format(coin['tp3'])}\n"
+                f"{price_format(coin['long_tp3'])}\n"
 
                 "📐 R/R: 1 : 2\n\n"
             )
 
+    # ==================================================
+    # SHORT
+    # ==================================================
+
+    message += (
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "📉 SHORT FIRSATLARI\n\n"
+    )
+
+    if not short_results:
+
+        message += (
+            "🟡 Şu anda trade edilebilir "
+            "SHORT sinyali yok.\n\n"
+        )
+
+    else:
+
+        for i, coin in enumerate(
+            short_results,
+            1
+        ):
+
+            message += (
+
+                f"🏆 {i}. "
+                f"{coin['symbol']}\n"
+
+                f"{coin['short_signal']}\n"
+
+                f"⭐ Sinyal gücü: "
+                f"{coin['short_score']}/100\n\n"
+
+                f"💰 Giriş: "
+                f"{price_format(coin['price'])}\n"
+
+                f"RSI: "
+                f"{coin['rsi15']:.1f}"
+                f" | 1h: "
+                f"{coin['rsi1h']:.1f}"
+                f" | 4h: "
+                f"{coin['rsi4h']:.1f}\n"
+
+                f"🔥 Hacim: "
+                f"x{coin['volume']:.1f}\n"
+
+                f"🚀 Momentum: "
+                f"{coin['momentum']:+.1f}%\n"
+
+                f"📊 Stoch RSI: "
+                f"{coin['stoch']:.1f}\n"
+
+                f"🧠 Negatif: "
+                f"{', '.join(coin['short_reasons'][:8])}\n"
+            )
+
+            if coin["short_warnings"]:
+
+                message += (
+                    "⚠️ "
+                    + ", ".join(
+                        coin["short_warnings"][:4]
+                    )
+                    + "\n"
+                )
+
+            message += (
+
+                f"\n🛑 SL: "
+                f"{price_format(coin['short_sl'])}\n"
+
+                f"🎯 TP1: "
+                f"{price_format(coin['short_tp1'])}\n"
+
+                f"🎯 TP2: "
+                f"{price_format(coin['short_tp2'])}\n"
+
+                f"🎯 TP3: "
+                f"{price_format(coin['short_tp3'])}\n"
+
+                "📐 R/R: 1 : 2\n\n"
+            )
 
     message += (
         "━━━━━━━━━━━━━━━━━━\n"
@@ -958,7 +1242,6 @@ def main():
         "⚠️ Teknik sinyal sistemidir. "
         "Yatırım tavsiyesi değildir."
     )
-
 
     print(message)
 
