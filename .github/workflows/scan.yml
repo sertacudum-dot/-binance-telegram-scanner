@@ -16,4 +16,4 @@ jobs:
       - name: Run Binance Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python bot.py
+        run: python Bot.py
