@@ -5,7 +5,6 @@ import urllib.parse
 import math
 from datetime import datetime, timezone
 
-
 BINANCE = "https://data-api.binance.vision"
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
@@ -20,6 +19,7 @@ STABLECOINS = {
 # =========================================================
 
 def get(url):
+
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0"}
@@ -34,12 +34,13 @@ def get(url):
 # =========================================================
 
 def get_chat_id():
+
     try:
-        data = get(
-            f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-        )
+        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+        data = get(url)
 
         for update in reversed(data.get("result", [])):
+
             message = update.get("message")
 
             if message and message.get("chat"):
@@ -52,6 +53,7 @@ def get_chat_id():
 
 
 def send_telegram(message):
+
     chat_id = get_chat_id()
 
     if not chat_id:
@@ -80,15 +82,16 @@ def send_telegram(message):
 # =========================================================
 
 def get_klines(symbol, interval, limit=200):
+
     params = urllib.parse.urlencode({
         "symbol": symbol,
         "interval": interval,
         "limit": limit
     })
 
-    data = get(
-        BINANCE + "/api/v3/klines?" + params
-    )
+    url = BINANCE + "/api/v3/klines?" + params
+
+    data = get(url)
 
     close = [float(x[4]) for x in data]
     high = [float(x[2]) for x in data]
@@ -103,10 +106,12 @@ def get_klines(symbol, interval, limit=200):
 # =========================================================
 
 def ema(values, period):
+
     if len(values) < period:
         return values[-1]
 
     multiplier = 2 / (period + 1)
+
     result = sum(values[:period]) / period
 
     for value in values[period:]:
@@ -119,6 +124,7 @@ def ema(values, period):
 
 
 def rsi(values, period=14):
+
     if len(values) <= period:
         return 50
 
@@ -126,6 +132,7 @@ def rsi(values, period=14):
     losses = []
 
     for i in range(1, len(values)):
+
         change = values[i] - values[i - 1]
 
         gains.append(max(change, 0))
@@ -135,6 +142,7 @@ def rsi(values, period=14):
     avg_loss = sum(losses[:period]) / period
 
     for i in range(period, len(gains)):
+
         avg_gain = (
             avg_gain * (period - 1)
             + gains[i]
@@ -154,6 +162,7 @@ def rsi(values, period=14):
 
 
 def stoch_rsi(values, period=14):
+
     rsi_values = []
 
     for i in range(period, len(values)):
@@ -174,17 +183,20 @@ def stoch_rsi(values, period=14):
 
     return (
         (rsi_values[-1] - lowest)
-        / (highest - lowest)
+        /
+        (highest - lowest)
     ) * 100
 
 
 def macd(values):
+
     if len(values) < 35:
         return 0, 0, 0
 
     macd_values = []
 
     for i in range(26, len(values)):
+
         e12 = ema(values[:i + 1], 12)
         e26 = ema(values[:i + 1], 26)
 
@@ -197,6 +209,7 @@ def macd(values):
 
 
 def bollinger(values, period=20):
+
     recent = values[-period:]
 
     middle = sum(recent) / len(recent)
@@ -216,10 +229,12 @@ def bollinger(values, period=20):
 
 
 def obv(values, volumes):
+
     result = 0
     output = [0]
 
     for i in range(1, len(values)):
+
         if values[i] > values[i - 1]:
             result += volumes[i]
 
@@ -232,12 +247,14 @@ def obv(values, volumes):
 
 
 def atr(high, low, close, period=14):
+
     if len(close) < period + 1:
         return 0
 
     trs = []
 
     for i in range(1, len(close)):
+
         tr = max(
             high[i] - low[i],
             abs(high[i] - close[i - 1]),
@@ -250,10 +267,11 @@ def atr(high, low, close, period=14):
 
 
 # =========================================================
-# ADX / DI
+# ADX + DI
 # =========================================================
 
 def adx_di(high, low, close, period=14):
+
     if len(close) < period * 2 + 5:
         return 0, 0, 0
 
@@ -262,6 +280,7 @@ def adx_di(high, low, close, period=14):
     minus_dm = []
 
     for i in range(1, len(close)):
+
         up_move = high[i] - high[i - 1]
         down_move = low[i - 1] - low[i]
 
@@ -303,25 +322,16 @@ def adx_di(high, low, close, period=14):
 
     dx_values = []
 
-    start = max(
-        0,
-        len(tr_list) - period * 2
-    )
+    for i in range(
+        max(0, len(tr_list) - period * 2),
+        len(tr_list)
+    ):
 
-    for i in range(start, len(tr_list)):
-        begin = max(0, i - period + 1)
+        start = max(0, i - period + 1)
 
-        tr_sum = sum(
-            tr_list[begin:i + 1]
-        )
-
-        plus_sum = sum(
-            plus_dm[begin:i + 1]
-        )
-
-        minus_sum = sum(
-            minus_dm[begin:i + 1]
-        )
+        tr_sum = sum(tr_list[start:i + 1])
+        plus_sum = sum(plus_dm[start:i + 1])
+        minus_sum = sum(minus_dm[start:i + 1])
 
         if tr_sum == 0:
             continue
@@ -334,18 +344,14 @@ def adx_di(high, low, close, period=14):
         if denominator == 0:
             continue
 
-        dx_values.append(
-            abs(pdi - mdi)
-            / denominator
-            * 100
-        )
+        dx = abs(pdi - mdi) / denominator * 100
+
+        dx_values.append(dx)
 
     if not dx_values:
         return 0, plus_di, minus_di
 
-    adx_value = sum(
-        dx_values[-period:]
-    ) / min(
+    adx_value = sum(dx_values[-period:]) / min(
         period,
         len(dx_values)
     )
@@ -358,23 +364,20 @@ def adx_di(high, low, close, period=14):
 # =========================================================
 
 def vwap(high, low, close, volume, period=50):
-    start = max(
-        0,
-        len(close) - period
-    )
 
-    cumulative_pv = 0
+    start = max(0, len(close) - period)
+
+    cumulative_price_volume = 0
     cumulative_volume = 0
 
     for i in range(start, len(close)):
-        typical = (
-            high[i]
-            + low[i]
-            + close[i]
+
+        typical_price = (
+            high[i] + low[i] + close[i]
         ) / 3
 
-        cumulative_pv += (
-            typical * volume[i]
+        cumulative_price_volume += (
+            typical_price * volume[i]
         )
 
         cumulative_volume += volume[i]
@@ -382,7 +385,7 @@ def vwap(high, low, close, volume, period=50):
     if cumulative_volume == 0:
         return close[-1]
 
-    return cumulative_pv / cumulative_volume
+    return cumulative_price_volume / cumulative_volume
 
 
 # =========================================================
@@ -390,6 +393,7 @@ def vwap(high, low, close, volume, period=50):
 # =========================================================
 
 def supertrend(high, low, close, period=10, multiplier=3):
+
     if len(close) < period + 2:
         return False
 
@@ -412,562 +416,170 @@ def supertrend(high, low, close, period=10, multiplier=3):
 
 
 # =========================================================
-# TDI
-# Basit RSI tabanlı trend filtresi
+# MOMENTUM ENGINE
 # =========================================================
 
-def tdi(values):
-    if len(values) < 30:
-        return 50, 50
+def momentum_data(close):
 
-    rsi_values = []
+    if len(close) < 20:
+        return {
+            "momentum": 0,
+            "previous_momentum": 0,
+            "acceleration": 0,
+            "short_momentum": 0,
+            "medium_momentum": 0
+        }
 
-    for i in range(15, len(values)):
-        rsi_values.append(
-            rsi(values[:i + 1])
-        )
-
-    if len(rsi_values) < 10:
-        return 50, 50
-
-    price_line = rsi_values[-1]
-    signal_line = sum(
-        rsi_values[-7:]
-    ) / 7
-
-    return price_line, signal_line
-
-
-# =========================================================
-# PATTERN DETECTION
-# =========================================================
-
-def detect_bull_flag(close, high, low, volume):
-    if len(close) < 40:
-        return None
-
-    pole_start = close[-35]
-    pole_end = close[-20]
-
-    pole_gain = (
-        pole_end / pole_start - 1
+    current = (
+        close[-1] / close[-5] - 1
     ) * 100
 
-    if pole_gain < 3:
-        return None
-
-    flag_high = max(close[-20:-1])
-    flag_low = min(close[-20:-1])
-
-    flag_range = (
-        flag_high - flag_low
-    ) / flag_high * 100
-
-    if flag_range > 8:
-        return None
-
-    resistance = max(
-        high[-10:-1]
-    )
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        current > resistance
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🚩 BULL FLAG KIRILDI",
-            "direction": "LONG",
-            "level": resistance
-        }
-
-    return None
-
-
-def detect_bear_flag(close, high, low, volume):
-    if len(close) < 40:
-        return None
-
-    pole_start = close[-35]
-    pole_end = close[-20]
-
-    pole_drop = (
-        1 - pole_end / pole_start
+    previous = (
+        close[-5] / close[-9] - 1
     ) * 100
 
-    if pole_drop < 3:
-        return None
+    short_momentum = (
+        close[-1] / close[-3] - 1
+    ) * 100
 
-    flag_high = max(close[-20:-1])
-    flag_low = min(close[-20:-1])
+    medium_momentum = (
+        close[-1] / close[-10] - 1
+    ) * 100
 
-    flag_range = (
-        flag_high - flag_low
-    ) / flag_high * 100
+    acceleration = current - previous
 
-    if flag_range > 8:
-        return None
+    return {
+        "momentum": current,
+        "previous_momentum": previous,
+        "acceleration": acceleration,
+        "short_momentum": short_momentum,
+        "medium_momentum": medium_momentum
+    }
 
-    support = min(
-        low[-10:-1]
-    )
 
-    current = close[-1]
+# =========================================================
+# BOLLINGER WIDTH
+# =========================================================
 
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
+def bollinger_width(close):
 
-    if avg_volume <= 0:
-        return None
+    upper, middle, lower = bollinger(close)
 
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
+    if middle == 0:
+        return 0
 
-    if (
-        current < support
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🚩 BEAR FLAG KIRILDI",
-            "direction": "SHORT",
-            "level": support
-        }
-
-    return None
-
-
-def detect_ascending_triangle(
-    close,
-    high,
-    low,
-    volume
-):
-    if len(close) < 50:
-        return None
-
-    resistance = max(
-        high[-30:-1]
-    )
-
-    lower_half = min(
-        low[-30:-15]
-    )
-
-    upper_half = min(
-        low[-15:-1]
-    )
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        upper_half > lower_half
-        and current > resistance
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🔺 ASCENDING TRIANGLE KIRILDI",
-            "direction": "LONG",
-            "level": resistance
-        }
-
-    return None
-
-
-def detect_descending_triangle(
-    close,
-    high,
-    low,
-    volume
-):
-    if len(close) < 50:
-        return None
-
-    support = min(
-        low[-30:-1]
-    )
-
-    upper_half = max(
-        high[-30:-15]
-    )
-
-    lower_half = max(
-        high[-15:-1]
-    )
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        lower_half < upper_half
-        and current < support
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🔻 DESCENDING TRIANGLE KIRILDI",
-            "direction": "SHORT",
-            "level": support
-        }
-
-    return None
-
-
-def detect_range_breakout(
-    close,
-    high,
-    low,
-    volume
-):
-    if len(close) < 35:
-        return None
-
-    resistance = max(
-        high[-25:-1]
-    )
-
-    support = min(
-        low[-25:-1]
-    )
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        current > resistance
-        and volume_ratio >= 2
-    ):
-        return {
-            "name": "📦 RANGE BREAKOUT KIRILDI",
-            "direction": "LONG",
-            "level": resistance
-        }
-
-    if (
-        current < support
-        and volume_ratio >= 2
-    ):
-        return {
-            "name": "📦 RANGE BREAKDOWN KIRILDI",
-            "direction": "SHORT",
-            "level": support
-        }
-
-    return None
-
-
-def detect_cup_handle(close, volume):
-    if len(close) < 80:
-        return None
-
-    window = close[-70:]
-
-    left = window[:20]
-    middle = window[20:50]
-    right = window[50:60]
-    handle = window[60:]
-
-    left_high = max(left)
-    right_high = max(right)
-
-    bottom = min(middle)
-
-    neckline = min(
-        left_high,
-        right_high
-    )
-
-    if neckline <= 0:
-        return None
-
-    symmetry = (
-        abs(left_high - right_high)
-        / neckline
-    )
-
-    depth = (
-        neckline - bottom
-    ) / neckline
-
-    if symmetry > 0.06:
-        return None
-
-    if depth < 0.08 or depth > 0.45:
-        return None
-
-    handle_low = min(handle)
-
-    if (
-        handle_low < bottom
-        or handle_low < neckline * 0.88
-    ):
-        return None
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        current > neckline
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🥣 CUP & HANDLE KIRILDI",
-            "direction": "LONG",
-            "level": neckline
-        }
-
-    return None
-
-
-def detect_inverse_cup_handle(
-    close,
-    volume
-):
-    if len(close) < 80:
-        return None
-
-    window = close[-70:]
-
-    left = window[:20]
-    middle = window[20:50]
-    right = window[50:60]
-    handle = window[60:]
-
-    left_low = min(left)
-    right_low = min(right)
-
-    top = max(middle)
-
-    neckline = max(
-        left_low,
-        right_low
-    )
-
-    if neckline <= 0:
-        return None
-
-    symmetry = (
-        abs(left_low - right_low)
-        / neckline
-    )
-
-    depth = (
-        top - neckline
-    ) / top
-
-    if symmetry > 0.06:
-        return None
-
-    if depth < 0.08 or depth > 0.45:
-        return None
-
-    handle_high = max(handle)
-
-    if (
-        handle_high > top
-        or handle_high > neckline * 1.12
-    ):
-        return None
-
-    current = close[-1]
-
-    avg_volume = sum(
-        volume[-21:-1]
-    ) / 20
-
-    if avg_volume <= 0:
-        return None
-
-    volume_ratio = (
-        volume[-1] / avg_volume
-    )
-
-    if (
-        current < neckline
-        and volume_ratio >= 1.5
-    ):
-        return {
-            "name": "🙃 INVERSE CUP & HANDLE KIRILDI",
-            "direction": "SHORT",
-            "level": neckline
-        }
-
-    return None
-
-
-def detect_patterns(
-    close,
-    high,
-    low,
-    volume
-):
-    patterns = []
-
-    detectors = [
-        lambda: detect_bull_flag(
-            close, high, low, volume
-        ),
-        lambda: detect_bear_flag(
-            close, high, low, volume
-        ),
-        lambda: detect_ascending_triangle(
-            close, high, low, volume
-        ),
-        lambda: detect_descending_triangle(
-            close, high, low, volume
-        ),
-        lambda: detect_range_breakout(
-            close, high, low, volume
-        ),
-        lambda: detect_cup_handle(
-            close, volume
-        ),
-        lambda: detect_inverse_cup_handle(
-            close, volume
-        )
-    ]
-
-    for detector in detectors:
-        try:
-            result = detector()
-
-            if result:
-                patterns.append(result)
-
-        except Exception as e:
-            print("Pattern error:", e)
-
-    return patterns
+    return (
+        (upper - lower) / middle
+    ) * 100
 
 
 # =========================================================
 # FRESH BREAKOUT
 # =========================================================
 
-def breakout_fresh(
-    close,
-    high,
-    low,
-    volume,
-    direction,
-    level
-):
-    """
-    Kırılımın yeni olup olmadığını kontrol eder.
+def fresh_breakout(close, high, low, volume):
 
-    Amaç:
-    20 mum önce kırılmış coinleri
-    hâlâ 'yeni breakout' gibi göstermemek.
-    """
-
-    if len(close) < 8:
-        return False
+    if len(close) < 35:
+        return None
 
     current = close[-1]
 
-    if direction == "LONG":
+    resistance = max(
+        high[-21:-1]
+    )
 
-        crossed = False
-
-        for i in range(
-            max(1, len(close) - 5),
-            len(close)
-        ):
-            if close[i] > level:
-                crossed = True
-                break
-
-        if not crossed:
-            return False
-
-        if current < level:
-            return False
-
-    else:
-
-        crossed = False
-
-        for i in range(
-            max(1, len(close) - 5),
-            len(close)
-        ):
-            if close[i] < level:
-                crossed = True
-                break
-
-        if not crossed:
-            return False
-
-        if current > level:
-            return False
+    support = min(
+        low[-21:-1]
+    )
 
     avg_volume = sum(
         volume[-21:-1]
     ) / 20
 
     if avg_volume <= 0:
-        return False
+        return None
 
-    return (
+    volume_ratio = (
         volume[-1] / avg_volume
-    ) >= 1.5
+    )
+
+    # Son mum breakout
+    if (
+        current > resistance
+        and volume_ratio >= 1.5
+    ):
+
+        return {
+            "direction": "LONG",
+            "level": resistance,
+            "volume_ratio": volume_ratio
+        }
+
+    if (
+        current < support
+        and volume_ratio >= 1.5
+    ):
+
+        return {
+            "direction": "SHORT",
+            "level": support,
+            "volume_ratio": volume_ratio
+        }
+
+    return None
 
 
 # =========================================================
-# PUMP / DUMP
+# OVEREXTENSION
+# =========================================================
+
+def overextension(
+    close,
+    atr_value,
+    ema21,
+    bollinger_upper,
+    bollinger_lower
+):
+
+    price = close[-1]
+
+    if atr_value <= 0:
+        return {
+            "long": False,
+            "short": False,
+            "distance": 0
+        }
+
+    long_distance = (
+        price - ema21
+    ) / atr_value
+
+    short_distance = (
+        ema21 - price
+    ) / atr_value
+
+    long_over = (
+        long_distance >= 3
+        or price > bollinger_upper
+    )
+
+    short_over = (
+        short_distance >= 3
+        or price < bollinger_lower
+    )
+
+    return {
+        "long": long_over,
+        "short": short_over,
+        "distance": max(
+            long_distance,
+            short_distance
+        )
+    }
+
+
+# =========================================================
+# PUMP / DUMP RADAR
 # =========================================================
 
 def pump_dump_radar(
@@ -977,16 +589,20 @@ def pump_dump_radar(
     volume,
     adx_value,
     plus_di,
-    minus_di
+    minus_di,
+    ema21
 ):
-    if len(close) < 30:
+
+    if len(close) < 40:
         return None
 
     price = close[-1]
 
-    momentum = (
-        price / close[-5] - 1
-    ) * 100
+    momentum_info = momentum_data(close)
+
+    momentum = momentum_info["momentum"]
+    previous_momentum = momentum_info["previous_momentum"]
+    momentum_acceleration = momentum_info["acceleration"]
 
     avg_volume = sum(
         volume[-21:-1]
@@ -1003,7 +619,7 @@ def pump_dump_radar(
         volume[-11:-1]
     ) / 10
 
-    acceleration = (
+    volume_acceleration = (
         volume[-1] / previous_avg
         if previous_avg > 0
         else 1
@@ -1011,114 +627,288 @@ def pump_dump_radar(
 
     stoch = stoch_rsi(close)
 
+    upper, middle, lower = bollinger(close)
+
+    bb_width = bollinger_width(close)
+
+    distance_from_ema = (
+        (price - ema21) / ema21
+    ) * 100
+
     # -----------------------------------------------------
-    # PUMP
+    # PUMP SCORE
     # -----------------------------------------------------
 
     pump_score = 0
 
     if momentum >= 5:
-        pump_score += 30
+        pump_score += 20
     elif momentum >= 3:
-        pump_score += 22
+        pump_score += 15
     elif momentum >= 2:
-        pump_score += 12
-
-    if volume_ratio >= 5:
-        pump_score += 25
-    elif volume_ratio >= 3:
-        pump_score += 20
-    elif volume_ratio >= 2:
-        pump_score += 12
-
-    if acceleration >= 5:
-        pump_score += 20
-    elif acceleration >= 3:
-        pump_score += 15
-    elif acceleration >= 2:
         pump_score += 10
+    elif momentum >= 1:
+        pump_score += 5
 
-    if adx_value >= 35:
+    # Momentum acceleration
+    if momentum_acceleration >= 3:
+        pump_score += 20
+    elif momentum_acceleration >= 2:
         pump_score += 15
-    elif adx_value >= 25:
+    elif momentum_acceleration >= 1:
+        pump_score += 10
+    elif momentum_acceleration > 0:
+        pump_score += 5
+
+    # Volume
+    if volume_ratio >= 5:
+        pump_score += 20
+    elif volume_ratio >= 3:
+        pump_score += 15
+    elif volume_ratio >= 2:
+        pump_score += 10
+    elif volume_ratio >= 1.5:
+        pump_score += 5
+
+    # Volume acceleration
+    if volume_acceleration >= 5:
+        pump_score += 15
+    elif volume_acceleration >= 3:
+        pump_score += 12
+    elif volume_acceleration >= 2:
         pump_score += 8
 
+    # Trend
+    if adx_value >= 45:
+        pump_score += 10
+    elif adx_value >= 30:
+        pump_score += 7
+    elif adx_value >= 25:
+        pump_score += 4
+
     if plus_di > minus_di:
+        pump_score += 5
+
+    # BB expansion
+    if bb_width >= 8:
+        pump_score += 5
+
+    # -----------------------------------------------------
+    # OVEREXTENSION
+    # -----------------------------------------------------
+
+    overextended = False
+
+    if (
+        distance_from_ema >= 8
+        or price > upper
+    ):
+        overextended = True
+        pump_score -= 15
+
+    # Çok yüksek momentum ama ivme negatif
+    losing_momentum = (
+        momentum >= 3
+        and momentum_acceleration < 0
+    )
+
+    if losing_momentum:
+        pump_score -= 15
+
+    # -----------------------------------------------------
+    # FRESH BREAKOUT
+    # -----------------------------------------------------
+
+    breakout = fresh_breakout(
+        close,
+        high,
+        low,
+        volume
+    )
+
+    fresh = (
+        breakout is not None
+        and breakout["direction"] == "LONG"
+    )
+
+    if fresh:
         pump_score += 10
 
-    # Aşırı şişmiş hareketi radar olarak göster,
-    # fakat pump skorunu sınırsız büyütme.
-    if stoch >= 95:
-        pump_score += 3
+    pump_score = max(
+        0,
+        min(100, pump_score)
+    )
 
-    if pump_score >= 65:
+    # -----------------------------------------------------
+    # PUMP CLASSIFICATION
+    # -----------------------------------------------------
+
+    if pump_score >= 60:
+
+        if overextended:
+
+            status = "🔴 PUMP VAR AMA AŞIRI UZAMIŞ"
+
+        elif losing_momentum:
+
+            status = "🟡 PUMP VAR AMA HIZ KESİYOR"
+
+        elif fresh and momentum_acceleration > 0:
+
+            status = "🟢 ERKEN PUMP GİRİŞİ"
+
+        elif momentum_acceleration >= 1:
+
+            status = "🟢 PUMP HIZLANIYOR"
+
+        else:
+
+            status = "⚡ HAREKETLENİYOR"
+
         return {
             "type": "PUMP",
-            "score": min(100, pump_score),
+            "score": pump_score,
+            "status": status,
             "momentum": momentum,
+            "previous_momentum": previous_momentum,
+            "momentum_acceleration": momentum_acceleration,
             "volume": volume_ratio,
-            "acceleration": acceleration,
+            "acceleration": volume_acceleration,
             "adx": adx_value,
-            "stoch": stoch
+            "stoch": stoch,
+            "bb_width": bb_width,
+            "overextended": overextended,
+            "fresh_breakout": fresh,
+            "distance_ema": distance_from_ema
         }
 
-    # -----------------------------------------------------
+    # =====================================================
     # DUMP
-    # -----------------------------------------------------
+    # =====================================================
 
     dump_score = 0
 
     if momentum <= -5:
-        dump_score += 30
+        dump_score += 20
     elif momentum <= -3:
-        dump_score += 22
+        dump_score += 15
     elif momentum <= -2:
-        dump_score += 12
+        dump_score += 10
+    elif momentum <= -1:
+        dump_score += 5
+
+    if momentum_acceleration <= -3:
+        dump_score += 20
+    elif momentum_acceleration <= -2:
+        dump_score += 15
+    elif momentum_acceleration <= -1:
+        dump_score += 10
+    elif momentum_acceleration < 0:
+        dump_score += 5
 
     if volume_ratio >= 5:
-        dump_score += 25
+        dump_score += 20
     elif volume_ratio >= 3:
-        dump_score += 20
+        dump_score += 15
     elif volume_ratio >= 2:
-        dump_score += 12
-
-    if acceleration >= 5:
-        dump_score += 20
-    elif acceleration >= 3:
-        dump_score += 15
-    elif acceleration >= 2:
         dump_score += 10
+    elif volume_ratio >= 1.5:
+        dump_score += 5
 
-    if adx_value >= 35:
+    if volume_acceleration >= 5:
         dump_score += 15
-    elif adx_value >= 25:
+    elif volume_acceleration >= 3:
+        dump_score += 12
+    elif volume_acceleration >= 2:
         dump_score += 8
 
+    if adx_value >= 45:
+        dump_score += 10
+    elif adx_value >= 30:
+        dump_score += 7
+    elif adx_value >= 25:
+        dump_score += 4
+
     if minus_di > plus_di:
+        dump_score += 5
+
+    short_overextended = (
+        distance_from_ema <= -8
+        or price < lower
+    )
+
+    losing_down_momentum = (
+        momentum <= -3
+        and momentum_acceleration > 0
+    )
+
+    if short_overextended:
+        dump_score -= 15
+
+    if losing_down_momentum:
+        dump_score -= 15
+
+    fresh_dump = (
+        breakout is not None
+        and breakout["direction"] == "SHORT"
+    )
+
+    if fresh_dump:
         dump_score += 10
 
-    if stoch <= 5:
-        dump_score += 3
+    dump_score = max(
+        0,
+        min(100, dump_score)
+    )
 
-    if dump_score >= 65:
+    if dump_score >= 60:
+
+        if short_overextended:
+
+            status = "🔴 DUMP VAR AMA AŞIRI UZAMIŞ"
+
+        elif losing_down_momentum:
+
+            status = "🟡 DUMP VAR AMA HIZ KESİYOR"
+
+        elif fresh_dump and momentum_acceleration < 0:
+
+            status = "🔴 ERKEN DUMP GİRİŞİ"
+
+        elif momentum_acceleration <= -1:
+
+            status = "🔴 DUMP HIZLANIYOR"
+
+        else:
+
+            status = "⚡ DÜŞÜŞ HIZLANIYOR"
+
         return {
             "type": "DUMP",
-            "score": min(100, dump_score),
+            "score": dump_score,
+            "status": status,
             "momentum": momentum,
+            "previous_momentum": previous_momentum,
+            "momentum_acceleration": momentum_acceleration,
             "volume": volume_ratio,
-            "acceleration": acceleration,
+            "acceleration": volume_acceleration,
             "adx": adx_value,
-            "stoch": stoch
+            "stoch": stoch,
+            "bb_width": bb_width,
+            "overextended": short_overextended,
+            "fresh_breakout": fresh_dump,
+            "distance_ema": distance_from_ema
         }
 
     return None
 
 
 # =========================================================
-# PRICE FORMAT
+# FORMAT
 # =========================================================
 
 def price_format(value):
+
     if value >= 100:
         return f"{value:.2f}"
 
@@ -1132,7 +922,9 @@ def price_format(value):
 
 
 def stablecoin_pair(symbol):
+
     base = symbol.replace("USDT", "")
+
     return base in STABLECOINS
 
 
@@ -1143,10 +935,6 @@ def stablecoin_pair(symbol):
 def analyze(symbol):
 
     try:
-
-        # -------------------------------------------------
-        # DATA
-        # -------------------------------------------------
 
         close15, high15, low15, vol15 = get_klines(
             symbol,
@@ -1165,52 +953,25 @@ def analyze(symbol):
 
         price = close15[-1]
 
-        # -------------------------------------------------
-        # RSI
-        # -------------------------------------------------
-
         rsi15 = rsi(close15)
         rsi1h = rsi(close1h)
         rsi4h = rsi(close4h)
-
-        # -------------------------------------------------
-        # EMA
-        # -------------------------------------------------
 
         ema9 = ema(close15, 9)
         ema21 = ema(close15, 21)
         ema50 = ema(close15, 50)
 
-        ema9_1h = ema(close1h, 9)
-        ema21_1h = ema(close1h, 21)
-
         ema21_4h = ema(close4h, 21)
         ema50_4h = ema(close4h, 50)
-
-        # -------------------------------------------------
-        # MACD
-        # -------------------------------------------------
 
         macd15, signal15, hist15 = macd(close15)
         macd1h, signal1h, hist1h = macd(close1h)
 
-        # -------------------------------------------------
-        # STOCH RSI
-        # -------------------------------------------------
-
         stoch = stoch_rsi(close15)
-
-        # -------------------------------------------------
-        # BOLLINGER
-        # -------------------------------------------------
 
         upper, middle, lower = bollinger(
             close15
         )
-
-        # -------------------------------------------------
-        # OBV
-        # -------------------------------------------------
 
         obv_values = obv(
             close15,
@@ -1218,12 +979,10 @@ def analyze(symbol):
         )
 
         obv_positive = (
+            len(obv_values) >= 6
+            and
             obv_values[-1] > obv_values[-5]
         )
-
-        # -------------------------------------------------
-        # ATR
-        # -------------------------------------------------
 
         atr_value = atr(
             high15,
@@ -1231,22 +990,11 @@ def analyze(symbol):
             close15
         )
 
-        if atr_value <= 0:
-            return None
-
-        # -------------------------------------------------
-        # ADX / DI
-        # -------------------------------------------------
-
         adx_value, plus_di, minus_di = adx_di(
             high15,
             low15,
             close15
         )
-
-        # -------------------------------------------------
-        # VWAP
-        # -------------------------------------------------
 
         current_vwap = vwap(
             high15,
@@ -1254,28 +1002,6 @@ def analyze(symbol):
             close15,
             vol15
         )
-
-        # -------------------------------------------------
-        # SUPERTREND
-        # -------------------------------------------------
-
-        supertrend_up = supertrend(
-            high15,
-            low15,
-            close15
-        )
-
-        # -------------------------------------------------
-        # TDI
-        # -------------------------------------------------
-
-        tdi_price, tdi_signal = tdi(
-            close15
-        )
-
-        # -------------------------------------------------
-        # VOLUME
-        # -------------------------------------------------
 
         avg_volume = sum(
             vol15[-21:-1]
@@ -1298,597 +1024,218 @@ def analyze(symbol):
             else 1
         )
 
-        # -------------------------------------------------
-        # MOMENTUM
-        # -------------------------------------------------
-
-        momentum = (
-            price / close15[-5] - 1
-        ) * 100
-
-        momentum_1h = (
-            close1h[-1] / close1h[-4] - 1
-        ) * 100
-
-        # -------------------------------------------------
-        # PATTERNS
-        # -------------------------------------------------
-
-        patterns = detect_patterns(
-            close15,
-            high15,
-            low15,
-            vol15
+        momentum_info = momentum_data(
+            close15
         )
 
-        long_patterns = [
-            p for p in patterns
-            if p["direction"] == "LONG"
-            and breakout_fresh(
-                close15,
-                high15,
-                low15,
-                vol15,
-                "LONG",
-                p["level"]
-            )
+        momentum = momentum_info["momentum"]
+        momentum_acceleration = momentum_info[
+            "acceleration"
         ]
 
-        short_patterns = [
-            p for p in patterns
-            if p["direction"] == "SHORT"
-            and breakout_fresh(
-                close15,
-                high15,
-                low15,
-                vol15,
-                "SHORT",
-                p["level"]
-            )
-        ]
-
-        # =================================================
+        # -------------------------------------------------
         # LONG
-        # =================================================
+        # -------------------------------------------------
 
         long_score = 0
         long_reasons = []
 
-        # 15m trend
+        if 50 <= rsi15 <= 68:
+            long_score += 8
+            long_reasons.append("RSI ideal")
+
+        if 50 <= rsi1h <= 70:
+            long_score += 8
+            long_reasons.append("1h RSI")
+
+        if 45 <= rsi4h <= 70:
+            long_score += 7
+            long_reasons.append("4h RSI")
+
         if price > ema9 > ema21:
             long_score += 10
-            long_reasons.append(
-                "15m EMA trend"
-            )
+            long_reasons.append("15m EMA uptrend")
 
-        # 1h trend
-        if (
-            close1h[-1] > ema9_1h
-            and ema9_1h > ema21_1h
-        ):
-            long_score += 10
-            long_reasons.append(
-                "1h trend"
-            )
+        if price > ema50:
+            long_score += 6
+            long_reasons.append("EMA50")
 
-        # 4h trend
         if (
-            close4h[-1] > ema21_4h
+            price > ema21_4h
             and ema21_4h > ema50_4h
         ):
             long_score += 10
-            long_reasons.append(
-                "4h trend"
-            )
+            long_reasons.append("4h trend")
 
-        # RSI
-        if 50 <= rsi15 <= 67:
-            long_score += 7
-            long_reasons.append(
-                "RSI"
-            )
-
-        if 50 <= rsi1h <= 70:
-            long_score += 6
-            long_reasons.append(
-                "1h RSI"
-            )
-
-        if 45 <= rsi4h <= 70:
-            long_score += 5
-            long_reasons.append(
-                "4h RSI"
-            )
-
-        # MACD
-        if (
-            macd1h > signal1h
-            and hist1h > 0
-        ):
+        if macd1h > signal1h:
             long_score += 8
-            long_reasons.append(
-                "MACD"
-            )
+            long_reasons.append("1h MACD")
 
-        # TDI
-        if tdi_price > tdi_signal:
-            long_score += 5
-            long_reasons.append(
-                "TDI"
-            )
+        if 20 <= stoch <= 80:
+            long_score += 6
+            long_reasons.append("Stoch RSI")
 
-        # OBV
+        if middle < price < upper:
+            long_score += 4
+            long_reasons.append("Bollinger")
+
         if obv_positive:
             long_score += 5
-            long_reasons.append(
-                "OBV"
-            )
+            long_reasons.append("OBV")
 
-        # VWAP
         if price > current_vwap:
-            long_score += 7
-            long_reasons.append(
-                "VWAP"
-            )
-
-        # ADX / DI
-        if (
-            adx_value >= 25
-            and plus_di > minus_di
-        ):
-            long_score += 8
-            long_reasons.append(
-                "ADX/DI"
-            )
-
-        # Supertrend
-        if supertrend_up:
-            long_score += 5
-            long_reasons.append(
-                "Supertrend"
-            )
-
-        # Bollinger
-        if (
-            middle < price < upper
-        ):
-            long_score += 4
-            long_reasons.append(
-                "Bollinger"
-            )
-
-        # Volume
-        if volume_ratio >= 3:
-            long_score += 7
-            long_reasons.append(
-                "Volume"
-            )
-        elif volume_ratio >= 2:
-            long_score += 5
-        elif volume_ratio >= 1.5:
-            long_score += 3
-
-        # Acceleration
-        if volume_acceleration >= 3:
-            long_score += 5
-            long_reasons.append(
-                "Volume acceleration"
-            )
-        elif volume_acceleration >= 2:
-            long_score += 3
-
-        # Momentum
-        if 0.5 <= momentum <= 4:
             long_score += 6
-            long_reasons.append(
-                "Momentum"
-            )
+            long_reasons.append("VWAP")
 
-        # 1h momentum confirmation
-        if momentum_1h > 0:
+        if adx_value >= 25 and plus_di > minus_di:
+            long_score += 8
+            long_reasons.append("ADX/DI")
+
+        if volume_ratio >= 3:
+            long_score += 10
+        elif volume_ratio >= 2:
+            long_score += 7
+        elif volume_ratio >= 1.5:
             long_score += 4
 
+        if volume_acceleration >= 3:
+            long_score += 6
+            long_reasons.append("Volume Acceleration")
+
+        if 0.5 <= momentum <= 5:
+            long_score += 7
+            long_reasons.append("Momentum")
+
+        if momentum_acceleration >= 1:
+            long_score += 5
+            long_reasons.append("Momentum Acceleration")
+
         # -------------------------------------------------
-        # LONG OVEREXTENSION
-        # -------------------------------------------------
-
-        if rsi15 >= 75:
-            long_score -= 12
-            long_reasons.append(
-                "Overextension"
-            )
-
-        if stoch >= 92:
-            long_score -= 10
-            long_reasons.append(
-                "Stoch aşırı yüksek"
-            )
-
-        if (
-            price > upper
-            and volume_ratio < 3
-        ):
-            long_score -= 8
-            long_reasons.append(
-                "BB overextension"
-            )
-
-        # Pattern
-        if long_patterns:
-            long_score += 15
-
-            long_reasons.append(
-                long_patterns[0]["name"]
-            )
-
-        # =================================================
         # SHORT
-        # =================================================
+        # -------------------------------------------------
 
         short_score = 0
         short_reasons = []
 
-        # 15m trend
+        if 32 <= rsi15 <= 50:
+            short_score += 8
+            short_reasons.append("RSI weakness")
+
+        if 30 <= rsi1h <= 50:
+            short_score += 8
+            short_reasons.append("1h RSI")
+
+        if 30 <= rsi4h <= 55:
+            short_score += 7
+            short_reasons.append("4h RSI")
+
         if price < ema9 < ema21:
             short_score += 10
-            short_reasons.append(
-                "15m EMA downtrend"
-            )
+            short_reasons.append("15m EMA downtrend")
 
-        # 1h trend
-        if (
-            close1h[-1] < ema9_1h
-            and ema9_1h < ema21_1h
-        ):
-            short_score += 10
-            short_reasons.append(
-                "1h downtrend"
-            )
+        if price < ema50:
+            short_score += 6
+            short_reasons.append("EMA50")
 
-        # 4h trend
         if (
-            close4h[-1] < ema21_4h
+            price < ema21_4h
             and ema21_4h < ema50_4h
         ):
             short_score += 10
-            short_reasons.append(
-                "4h downtrend"
-            )
-
-        # RSI
-        if 33 <= rsi15 <= 50:
-            short_score += 7
-            short_reasons.append(
-                "RSI weakness"
-            )
-
-        if 30 <= rsi1h <= 50:
-            short_score += 6
-            short_reasons.append(
-                "1h RSI"
-            )
-
-        if 30 <= rsi4h <= 55:
-            short_score += 5
-            short_reasons.append(
-                "4h RSI"
-            )
-
-        # MACD
-        if (
-            macd1h < signal1h
-            and hist1h < 0
-        ):
-            short_score += 8
-            short_reasons.append(
-                "MACD"
-            )
-
-        # TDI
-        if tdi_price < tdi_signal:
-            short_score += 5
-            short_reasons.append(
-                "TDI"
-            )
-
-        # OBV
-        if not obv_positive:
-            short_score += 5
-            short_reasons.append(
-                "OBV"
-            )
-
-        # VWAP
-        if price < current_vwap:
-            short_score += 7
-            short_reasons.append(
-                "VWAP"
-            )
-
-        # ADX / DI
-        if (
-            adx_value >= 25
-            and minus_di > plus_di
-        ):
-            short_score += 8
-            short_reasons.append(
-                "ADX/DI"
-            )
-
-        # Supertrend
-        if not supertrend_up:
-            short_score += 5
-            short_reasons.append(
-                "Supertrend"
-            )
-
-        # Bollinger
-        if (
-            lower < price < middle
-        ):
-            short_score += 4
-            short_reasons.append(
-                "Bollinger"
-            )
-
-        # Volume
-        if volume_ratio >= 3:
-            short_score += 7
-            short_reasons.append(
-                "Volume"
-            )
-        elif volume_ratio >= 2:
-            short_score += 5
-        elif volume_ratio >= 1.5:
-            short_score += 3
-
-        # Acceleration
-        if volume_acceleration >= 3:
-            short_score += 5
-            short_reasons.append(
-                "Volume acceleration"
-            )
-        elif volume_acceleration >= 2:
-            short_score += 3
-
-        # Momentum
-        if -4 <= momentum <= -0.5:
-            short_score += 6
-            short_reasons.append(
-                "Momentum"
-            )
-
-        # 1h momentum
-        if momentum_1h < 0:
-            short_score += 4
-
-        # -------------------------------------------------
-        # SHORT OVEREXTENSION
-        # -------------------------------------------------
-
-        if rsi15 <= 30:
-            short_score -= 15
-            short_reasons.append(
-                "Overextension"
-            )
-
-        elif rsi15 <= 33:
-            short_score -= 7
-            short_reasons.append(
-                "RSI düşük"
-            )
-
-        if stoch <= 8:
-            short_score -= 10
-            short_reasons.append(
-                "Stoch aşırı düşük"
-            )
-
-        if (
-            price < lower
-            and volume_ratio < 3
-        ):
-            short_score -= 8
-            short_reasons.append(
-                "BB overextension"
-            )
-
-        # Pattern
-        if short_patterns:
-            short_score += 15
-
-            short_reasons.append(
-                short_patterns[0]["name"]
-            )
-
-        # =================================================
-        # HARD FILTERS
-        # =================================================
-
-        # Long için minimum yapı
-        long_hard = (
-            volume_ratio >= 1.5
-            and adx_value >= 20
-            and plus_di > minus_di
-            and price > current_vwap
-            and momentum > 0
-        )
-
-        # Short için minimum yapı
-        short_hard = (
-            volume_ratio >= 1.5
-            and adx_value >= 20
-            and minus_di > plus_di
-            and price < current_vwap
-            and momentum < 0
-        )
-
-        # =================================================
-        # A CLASS FILTER
-        # =================================================
-
-        # Pattern varsa daha kolay,
-        # yoksa daha sıkı teyit.
-
-        long_confirmations = 0
-
-        if price > ema9 > ema21:
-            long_confirmations += 1
-
-        if close1h[-1] > ema21_1h:
-            long_confirmations += 1
-
-        if close4h[-1] > ema21_4h:
-            long_confirmations += 1
-
-        if macd1h > signal1h:
-            long_confirmations += 1
-
-        if tdi_price > tdi_signal:
-            long_confirmations += 1
-
-        if obv_positive:
-            long_confirmations += 1
-
-        if price > current_vwap:
-            long_confirmations += 1
-
-        if plus_di > minus_di:
-            long_confirmations += 1
-
-        if supertrend_up:
-            long_confirmations += 1
-
-        if momentum > 0:
-            long_confirmations += 1
-
-        if volume_ratio >= 1.5:
-            long_confirmations += 1
-
-        # SHORT confirmations
-
-        short_confirmations = 0
-
-        if price < ema9 < ema21:
-            short_confirmations += 1
-
-        if close1h[-1] < ema21_1h:
-            short_confirmations += 1
-
-        if close4h[-1] < ema21_4h:
-            short_confirmations += 1
+            short_reasons.append("4h downtrend")
 
         if macd1h < signal1h:
-            short_confirmations += 1
+            short_score += 8
+            short_reasons.append("1h MACD")
 
-        if tdi_price < tdi_signal:
-            short_confirmations += 1
+        if stoch < 80:
+            short_score += 5
+            short_reasons.append("Stoch RSI")
+
+        if lower < price < middle:
+            short_score += 4
+            short_reasons.append("Bollinger")
 
         if not obv_positive:
-            short_confirmations += 1
+            short_score += 5
+            short_reasons.append("OBV")
 
         if price < current_vwap:
-            short_confirmations += 1
+            short_score += 6
+            short_reasons.append("VWAP")
 
-        if minus_di > plus_di:
-            short_confirmations += 1
+        if adx_value >= 25 and minus_di > plus_di:
+            short_score += 8
+            short_reasons.append("ADX/DI")
 
-        if not supertrend_up:
-            short_confirmations += 1
+        if volume_ratio >= 3:
+            short_score += 10
+        elif volume_ratio >= 2:
+            short_score += 7
+        elif volume_ratio >= 1.5:
+            short_score += 4
 
-        if momentum < 0:
-            short_confirmations += 1
+        if volume_acceleration >= 3:
+            short_score += 6
+            short_reasons.append("Volume Acceleration")
 
-        if volume_ratio >= 1.5:
-            short_confirmations += 1
+        if -5 <= momentum <= -0.5:
+            short_score += 7
+            short_reasons.append("Momentum")
 
-        # =================================================
-        # SIGNALS
-        # =================================================
+        if momentum_acceleration <= -1:
+            short_score += 5
+            short_reasons.append("Momentum Acceleration")
 
-        long_signal = None
-        short_signal = None
+        # -------------------------------------------------
+        # FILTERS
+        # -------------------------------------------------
 
-        # Strong LONG
-        if (
-            long_score >= 82
-            and long_hard
-            and long_confirmations >= 8
-            and rsi15 < 75
-            and stoch < 92
-        ):
-            long_signal = "🟢 GÜÇLÜ AL"
+        if volume_ratio < 1.3:
+            long_score -= 15
+            short_score -= 15
 
-        # Strong SHORT
-        if (
-            short_score >= 82
-            and short_hard
-            and short_confirmations >= 8
-            and rsi15 > 30
-            and stoch > 8
-        ):
-            short_signal = "🔴 GÜÇLÜ SAT"
+        if adx_value < 18:
+            long_score -= 8
+            short_score -= 8
 
-        # =================================================
-        # QUALITY
-        # =================================================
+        if stoch > 92:
+            long_score -= 10
 
-        long_quality = (
-            "A+"
-            if long_score >= 90
-            and long_confirmations >= 10
-            else
-            "A"
-            if long_score >= 82
-            else
-            "B"
+        if stoch < 8:
+            short_score -= 10
+
+        # -------------------------------------------------
+        # OVEREXTENSION
+        # -------------------------------------------------
+
+        extension = overextension(
+            close15,
+            atr_value,
+            ema21,
+            upper,
+            lower
         )
 
-        short_quality = (
-            "A+"
-            if short_score >= 90
-            and short_confirmations >= 10
-            else
-            "A"
-            if short_score >= 82
-            else
-            "B"
+        if extension["long"]:
+            long_score -= 20
+
+        if extension["short"]:
+            short_score -= 20
+
+        long_score = max(
+            0,
+            min(100, long_score)
         )
 
-        # =================================================
-        # REAL RISK / REWARD
-        # =================================================
-
-        # ATR bazlı risk
-        risk = atr_value * 1.4
-
-        # LONG
-        long_sl = price - risk
-
-        long_tp1 = price + risk * 1.0
-        long_tp2 = price + risk * 1.5
-        long_tp3 = price + risk * 2.0
-
-        long_rr = (
-            (long_tp3 - price)
-            / (price - long_sl)
+        short_score = max(
+            0,
+            min(100, short_score)
         )
 
-        # SHORT
-        short_sl = price + risk
-
-        short_tp1 = price - risk * 1.0
-        short_tp2 = price - risk * 1.5
-        short_tp3 = price - risk * 2.0
-
-        short_rr = (
-            (price - short_tp3)
-            / (short_sl - price)
-        )
-
-        # =================================================
-        # RADAR
-        # =================================================
+        # -------------------------------------------------
+        # PUMP / DUMP
+        # -------------------------------------------------
 
         radar = pump_dump_radar(
             close15,
@@ -1897,40 +1244,75 @@ def analyze(symbol):
             vol15,
             adx_value,
             plus_di,
-            minus_di
+            minus_di,
+            ema21
         )
 
+        # -------------------------------------------------
+        # SIGNALS
+        # -------------------------------------------------
+
+        long_signal = None
+        short_signal = None
+
+        if (
+            long_score >= 85
+            and volume_ratio >= 1.5
+            and adx_value >= 20
+            and plus_di > minus_di
+            and price > current_vwap
+            and momentum > 0
+            and momentum_acceleration >= 0
+            and not extension["long"]
+        ):
+
+            long_signal = "🟢 GÜÇLÜ AL"
+
+        if (
+            short_score >= 85
+            and volume_ratio >= 1.5
+            and adx_value >= 20
+            and minus_di > plus_di
+            and price < current_vwap
+            and momentum < 0
+            and momentum_acceleration <= 0
+            and not extension["short"]
+        ):
+
+            short_signal = "🔴 GÜÇLÜ SAT"
+
+        # -------------------------------------------------
+        # ATR TARGETS
+        # -------------------------------------------------
+
+        if atr_value <= 0:
+            return None
+
+        risk = atr_value * 1.5
+
+        long_sl = price - risk
+        long_tp1 = price + risk
+        long_tp2 = price + risk * 1.5
+        long_tp3 = price + risk * 2
+
+        short_sl = price + risk
+        short_tp1 = price - risk
+        short_tp2 = price - risk * 1.5
+        short_tp3 = price - risk * 2
+
         return {
+
             "symbol": symbol,
             "price": price,
 
-            "long_score": max(
-                0,
-                min(100, long_score)
-            ),
-
-            "short_score": max(
-                0,
-                min(100, short_score)
-            ),
-
-            "long_quality": long_quality,
-            "short_quality": short_quality,
+            "long_score": long_score,
+            "short_score": short_score,
 
             "long_signal": long_signal,
             "short_signal": short_signal,
 
-            "long_confirmations":
-                long_confirmations,
-
-            "short_confirmations":
-                short_confirmations,
-
-            "long_reasons":
-                long_reasons,
-
-            "short_reasons":
-                short_reasons,
+            "long_reasons": long_reasons,
+            "short_reasons": short_reasons,
 
             "rsi15": rsi15,
             "rsi1h": rsi1h,
@@ -1939,12 +1321,13 @@ def analyze(symbol):
             "stoch": stoch,
 
             "volume": volume_ratio,
-
-            "volume_acceleration":
-                volume_acceleration,
+            "volume_acceleration": volume_acceleration,
 
             "momentum": momentum,
-            "momentum_1h": momentum_1h,
+            "previous_momentum": momentum_info[
+                "previous_momentum"
+            ],
+            "momentum_acceleration": momentum_acceleration,
 
             "adx": adx_value,
             "plus_di": plus_di,
@@ -1952,27 +1335,19 @@ def analyze(symbol):
 
             "vwap": current_vwap,
 
-            "patterns": patterns,
-
-            "long_patterns":
-                long_patterns,
-
-            "short_patterns":
-                short_patterns,
-
             "radar": radar,
+
+            "extension": extension,
 
             "long_sl": long_sl,
             "long_tp1": long_tp1,
             "long_tp2": long_tp2,
             "long_tp3": long_tp3,
-            "long_rr": long_rr,
 
             "short_sl": short_sl,
             "short_tp1": short_tp1,
             "short_tp2": short_tp2,
-            "short_tp3": short_tp3,
-            "short_rr": short_rr
+            "short_tp3": short_tp3
         }
 
     except Exception as e:
@@ -1991,7 +1366,8 @@ def analyze(symbol):
 def main():
 
     print(
-        "🚀 GELİŞMİŞ BINANCE SCANNER"
+        "🚀 GELİŞMİŞ BINANCE "
+        "LONG + SHORT SCANNER"
     )
 
     tickers = get(
@@ -2027,7 +1403,7 @@ def main():
                 ticker["quoteVolume"]
             )
 
-            if quote_volume < 5_000_000:
+            if quote_volume < 5000000:
                 continue
 
             candidates.append(
@@ -2040,13 +1416,12 @@ def main():
         except Exception:
             continue
 
-    # En likit 120 coin
     candidates.sort(
         key=lambda x: x[1],
         reverse=True
     )
 
-    candidates = candidates[:120]
+    candidates = candidates[:100]
 
     print(
         f"{len(candidates)} coin analiz edilecek."
@@ -2075,11 +1450,7 @@ def main():
     ]
 
     longs.sort(
-        key=lambda x: (
-            x["long_quality"] == "A+",
-            x["long_score"],
-            x["long_confirmations"]
-        ),
+        key=lambda x: x["long_score"],
         reverse=True
     )
 
@@ -2095,11 +1466,7 @@ def main():
     ]
 
     shorts.sort(
-        key=lambda x: (
-            x["short_quality"] == "A+",
-            x["short_score"],
-            x["short_confirmations"]
-        ),
+        key=lambda x: x["short_score"],
         reverse=True
     )
 
@@ -2116,12 +1483,11 @@ def main():
     ]
 
     pumps.sort(
-        key=lambda x:
-        x["radar"]["score"],
+        key=lambda x: x["radar"]["score"],
         reverse=True
     )
 
-    pumps = pumps[:3]
+    pumps = pumps[:5]
 
     # =====================================================
     # DUMP
@@ -2134,12 +1500,11 @@ def main():
     ]
 
     dumps.sort(
-        key=lambda x:
-        x["radar"]["score"],
+        key=lambda x: x["radar"]["score"],
         reverse=True
     )
 
-    dumps = dumps[:3]
+    dumps = dumps[:5]
 
     # =====================================================
     # MESSAGE
@@ -2161,23 +1526,19 @@ def main():
 
         "🧠 RSI • Stoch RSI • MACD • EMA\n"
 
-        "📈 BB • TDI • OBV • Supertrend\n"
+        "📈 BB • OBV • Supertrend\n"
 
         "📐 ADX • DI • VWAP\n"
 
         "🔥 Volume Acceleration\n"
 
-        "💥 Breakout Detection\n"
+        "🚀 Momentum Acceleration\n"
 
-        "🚩 Flag / Triangle\n"
+        "💥 Fresh Breakout\n"
 
-        "🥣 Cup & Handle\n"
+        "🛡️ Overextension Filter\n"
 
         "🎯 ATR + GERÇEK R/R\n"
-
-        "🛡️ Fresh Breakout Filter\n"
-
-        "🚫 Overextension Filter\n"
 
         "━━━━━━━━━━━━━━━━━━\n\n"
     )
@@ -2197,35 +1558,19 @@ def main():
 
     else:
 
-        for i, coin in enumerate(
-            longs,
-            1
-        ):
+        for i, coin in enumerate(longs, 1):
 
             message += (
-                f"🏆 {i}. "
-                f"{coin['symbol']}\n"
-
+                f"🏆 {i}. {coin['symbol']}\n"
                 f"{coin['long_signal']}\n"
-
-                f"⭐ Sinyal: "
-                f"{coin['long_score']}/100\n"
-
-                f"🏅 Kalite: "
-                f"{coin['long_quality']}\n"
-
-                f"🔎 Teyit: "
-                f"{coin['long_confirmations']}/11\n\n"
+                f"⭐ Sinyal: {coin['long_score']}/100\n\n"
 
                 f"💰 Giriş: "
                 f"{price_format(coin['price'])}\n"
 
-                f"RSI: "
-                f"{coin['rsi15']:.1f} "
-                f"| 1h: "
-                f"{coin['rsi1h']:.1f} "
-                f"| 4h: "
-                f"{coin['rsi4h']:.1f}\n"
+                f"RSI: {coin['rsi15']:.1f}"
+                f" | 1h: {coin['rsi1h']:.1f}"
+                f" | 4h: {coin['rsi4h']:.1f}\n"
 
                 f"🔥 Hacim: "
                 f"x{coin['volume']:.1f}\n"
@@ -2235,6 +1580,9 @@ def main():
 
                 f"🚀 Momentum: "
                 f"{coin['momentum']:+.1f}%\n"
+
+                f"⚡ Momentum ivmesi: "
+                f"{coin['momentum_acceleration']:+.1f} puan\n"
 
                 f"📐 ADX: "
                 f"{coin['adx']:.1f}\n"
@@ -2253,15 +1601,6 @@ def main():
                     + "\n"
                 )
 
-            for pattern in coin["long_patterns"]:
-
-                message += (
-                    "\n💥 FORMASYON KIRILDI\n"
-                    f"{pattern['name']}\n"
-                    f"📍 Seviye: "
-                    f"{price_format(pattern['level'])}\n"
-                )
-
             message += (
                 f"\n🛑 SL: "
                 f"{price_format(coin['long_sl'])}\n"
@@ -2275,8 +1614,7 @@ def main():
                 f"🎯 TP3: "
                 f"{price_format(coin['long_tp3'])}\n"
 
-                f"📐 Gerçek R/R: "
-                f"1 : {coin['long_rr']:.2f}\n\n"
+                "📐 R/R: 1 : 2\n\n"
 
                 "━━━━━━━━━━━━━━━━━━\n\n"
             )
@@ -2296,35 +1634,19 @@ def main():
 
     else:
 
-        for i, coin in enumerate(
-            shorts,
-            1
-        ):
+        for i, coin in enumerate(shorts, 1):
 
             message += (
-                f"🏆 {i}. "
-                f"{coin['symbol']}\n"
-
+                f"🏆 {i}. {coin['symbol']}\n"
                 f"{coin['short_signal']}\n"
-
-                f"⭐ Sinyal: "
-                f"{coin['short_score']}/100\n"
-
-                f"🏅 Kalite: "
-                f"{coin['short_quality']}\n"
-
-                f"🔎 Teyit: "
-                f"{coin['short_confirmations']}/11\n\n"
+                f"⭐ Sinyal: {coin['short_score']}/100\n\n"
 
                 f"💰 Giriş: "
                 f"{price_format(coin['price'])}\n"
 
-                f"RSI: "
-                f"{coin['rsi15']:.1f} "
-                f"| 1h: "
-                f"{coin['rsi1h']:.1f} "
-                f"| 4h: "
-                f"{coin['rsi4h']:.1f}\n"
+                f"RSI: {coin['rsi15']:.1f}"
+                f" | 1h: {coin['rsi1h']:.1f}"
+                f" | 4h: {coin['rsi4h']:.1f}\n"
 
                 f"🔥 Hacim: "
                 f"x{coin['volume']:.1f}\n"
@@ -2334,6 +1656,9 @@ def main():
 
                 f"📉 Momentum: "
                 f"{coin['momentum']:+.1f}%\n"
+
+                f"⚡ Momentum ivmesi: "
+                f"{coin['momentum_acceleration']:+.1f} puan\n"
 
                 f"📐 ADX: "
                 f"{coin['adx']:.1f}\n"
@@ -2352,15 +1677,6 @@ def main():
                     + "\n"
                 )
 
-            for pattern in coin["short_patterns"]:
-
-                message += (
-                    "\n💥 FORMASYON KIRILDI\n"
-                    f"{pattern['name']}\n"
-                    f"📍 Seviye: "
-                    f"{price_format(pattern['level'])}\n"
-                )
-
             message += (
                 f"\n🛑 SL: "
                 f"{price_format(coin['short_sl'])}\n"
@@ -2374,14 +1690,13 @@ def main():
                 f"🎯 TP3: "
                 f"{price_format(coin['short_tp3'])}\n"
 
-                f"📐 Gerçek R/R: "
-                f"1 : {coin['short_rr']:.2f}\n\n"
+                "📐 R/R: 1 : 2\n\n"
 
                 "━━━━━━━━━━━━━━━━━━\n\n"
             )
 
     # =====================================================
-    # PUMP
+    # PUMP RADAR
     # =====================================================
 
     message += "🚀 PUMP RADAR\n\n"
@@ -2394,18 +1709,14 @@ def main():
 
     else:
 
-        for i, coin in enumerate(
-            pumps,
-            1
-        ):
+        for i, coin in enumerate(pumps, 1):
 
             radar = coin["radar"]
 
             message += (
-                f"🚀 {i}. "
-                f"{coin['symbol']}\n"
+                f"🚀 {i}. {coin['symbol']}\n"
 
-                "⚡ HAREKETLENİYOR\n"
+                f"{radar['status']}\n"
 
                 f"⭐ Pump gücü: "
                 f"{radar['score']}/100\n\n"
@@ -2422,15 +1733,32 @@ def main():
                 f"🚀 Momentum: "
                 f"{radar['momentum']:+.1f}%\n"
 
+                f"⚡ Momentum ivmesi: "
+                f"{radar['momentum_acceleration']:+.1f} puan\n"
+
                 f"📐 ADX: "
                 f"{radar['adx']:.1f}\n"
 
                 f"📊 Stoch RSI: "
-                f"{radar['stoch']:.1f}\n\n"
+                f"{radar['stoch']:.1f}\n"
             )
 
+            if radar["fresh_breakout"]:
+
+                message += (
+                    "💥 FRESH BREAKOUT: EVET\n"
+                )
+
+            if radar["overextended"]:
+
+                message += (
+                    "🛡️ OVEREXTENSION: EVET\n"
+                )
+
+            message += "\n"
+
     # =====================================================
-    # DUMP
+    # DUMP RADAR
     # =====================================================
 
     message += "💣 DUMP RADAR\n\n"
@@ -2443,18 +1771,14 @@ def main():
 
     else:
 
-        for i, coin in enumerate(
-            dumps,
-            1
-        ):
+        for i, coin in enumerate(dumps, 1):
 
             radar = coin["radar"]
 
             message += (
-                f"💣 {i}. "
-                f"{coin['symbol']}\n"
+                f"💣 {i}. {coin['symbol']}\n"
 
-                "⚡ DÜŞÜŞ HIZLANIYOR\n"
+                f"{radar['status']}\n"
 
                 f"⭐ Dump gücü: "
                 f"{radar['score']}/100\n\n"
@@ -2471,22 +1795,35 @@ def main():
                 f"📉 Momentum: "
                 f"{radar['momentum']:+.1f}%\n"
 
+                f"⚡ Momentum ivmesi: "
+                f"{radar['momentum_acceleration']:+.1f} puan\n"
+
                 f"📐 ADX: "
                 f"{radar['adx']:.1f}\n"
 
                 f"📊 Stoch RSI: "
-                f"{radar['stoch']:.1f}\n\n"
+                f"{radar['stoch']:.1f}\n"
             )
 
-    # =====================================================
-    # FOOTER
-    # =====================================================
+            if radar["fresh_breakout"]:
+
+                message += (
+                    "💥 FRESH BREAKDOWN: EVET\n"
+                )
+
+            if radar["overextended"]:
+
+                message += (
+                    "🛡️ OVEREXTENSION: EVET\n"
+                )
+
+            message += "\n"
 
     message += (
         "━━━━━━━━━━━━━━━━━━\n"
 
-        "🛡️ Sinyaller: trend + hacim + momentum "
-        "+ breakout + risk filtresi\n"
+        "🧠 Momentum + momentum ivmesi + "
+        "hacim + breakout + trend + risk filtresi\n"
 
         "⚠️ Teknik sinyal sistemidir. "
         "Yatırım tavsiyesi değildir."
