@@ -1,82 +1,77 @@
 import os
 import json
+import math
 import urllib.request
 import urllib.parse
-import math
-import statistics
 from datetime import datetime, timezone
 
+
 # =========================================================
-# CONFIG
+# AYARLAR
 # =========================================================
 
 BINANCE = "https://data-api.binance.vision"
+TELEGRAM = "https://api.telegram.org"
 
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-LUNAR_KEY = os.environ.get("LUNARCRUSH_API_KEY", "").strip()
-LUNAR_BASE = "https://lunarcrush.com/api4"
+SCAN_LIMIT = int(os.environ.get("SCAN_LIMIT", "80"))
+
 
 STABLECOINS = {
     "USDT", "USDC", "FDUSD", "USDE",
-    "TUSD", "DAI", "RLUSD", "USD1", "USDD"
+    "TUSD", "DAI", "RLUSD", "USD1",
+    "USDD", "EUR", "TRY"
 }
 
-MIN_24H_QUOTE_VOLUME = 5_000_000
-
-MAX_TECH_COINS = 120
-MAX_FOLLOWER_COINS = 35
 
 # =========================================================
-# SECTOR KEYWORDS
+# SEKTÖRLER
 # =========================================================
 
-SECTOR_KEYWORDS = {
-    "DEFI": [
-        "defi", "aave", "uniswap", "chainlink", "maker",
-        "lido", "curve", "compound", "jupiter", "raydium",
-        "pancakeswap", "sushiswap", "morpho"
-    ],
+SECTORS = {
 
-    "GAMING": [
-        "gaming", "game", "immutable", "gala", "beam",
-        "ronin", "axie", "sandbox", "decentraland",
-        "illuvium", "pixels"
-    ],
+    "DEFI": {
+        "UNI", "AAVE", "MKR", "CRV",
+        "LDO", "COMP", "SNX", "DYDX",
+        "1INCH", "SUSHI", "ENA",
+        "PENDLE", "MORPHO", "JUP",
+        "RAY", "CAKE"
+    },
 
-    "AI": [
-        "ai", "artificial intelligence", "render",
-        "fetch", "bittensor", "near", "akash",
-        "virtual", "grass", "io.net"
-    ],
+    "L1": {
+        "ETH", "SOL", "AVAX", "ADA",
+        "DOT", "ATOM", "NEAR", "APT",
+        "SUI", "SEI", "ALGO",
+        "TRX", "TON", "ICP"
+    },
 
-    "MEME": [
-        "meme", "doge", "shib", "pepe", "bonk",
-        "floki", "wif", "mew", "brett"
-    ],
+    "L2": {
+        "ARB", "OP", "ZK",
+        "STRK", "MANTA", "IMX",
+        "MATIC", "POL", "ZRO"
+    },
 
-    "L1": [
-        "layer 1", "layer1", "ethereum", "solana",
-        "avalanche", "sui", "aptos", "sei", "injective",
-        "cosmos", "cardano", "near", "ton"
-    ],
+    "GAMING": {
+        "IMX", "GALA", "SAND",
+        "MANA", "AXS", "RON",
+        "BEAM", "PIXEL",
+        "ILV", "MAGIC", "SUPER"
+    },
 
-    "L2": [
-        "layer 2", "layer2", "arbitrum", "optimism",
-        "base", "zksync", "starknet", "scroll",
-        "mantle", "blast"
-    ],
+    "AI": {
+        "FET", "TAO", "RENDER",
+        "NEAR", "WLD", "ARKM",
+        "AKT", "IO", "AIOZ",
+        "VIRTUAL"
+    },
 
-    "RWA": [
-        "rwa", "real world asset", "ondo", "tokenized",
-        "centrifuge", "mantra"
-    ],
-
-    "DEPIN": [
-        "depin", "decentralized physical",
-        "helium", "filecoin", "arweave",
-        "akash", "render"
-    ]
+    "MEME": {
+        "DOGE", "SHIB", "PEPE",
+        "FLOKI", "BONK", "WIF",
+        "MEME", "BRETT", "MOG"
+    }
 }
 
 
@@ -84,112 +79,163 @@ SECTOR_KEYWORDS = {
 # HTTP
 # =========================================================
 
-def get(url, headers=None, timeout=20):
-
-    req_headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    if headers:
-        req_headers.update(headers)
+def http_json(url, data=None, timeout=20):
 
     req = urllib.request.Request(
         url,
-        headers=req_headers
+        data=data,
+        headers={
+            "User-Agent": "BinanceEarlyScanner/3.0"
+        }
     )
 
     with urllib.request.urlopen(
         req,
         timeout=timeout
-    ) as r:
+    ) as response:
 
         return json.loads(
-            r.read().decode()
+            response.read().decode()
         )
+
+
+def get(url):
+
+    return http_json(url)
 
 
 # =========================================================
 # TELEGRAM
 # =========================================================
 
-def get_chat_id():
+def telegram_updates():
+
+    if not TOKEN:
+        return []
 
     try:
 
-        url = (
-            f"https://api.telegram.org/"
-            f"bot{TOKEN}/getUpdates"
+        data = get(
+            f"{TELEGRAM}/bot{TOKEN}/getUpdates"
+            "?limit=20&timeout=1"
         )
 
-        data = get(url)
-
-        for update in reversed(
-            data.get("result", [])
-        ):
-
-            message = update.get("message")
-
-            if message and message.get("chat"):
-                return str(
-                    message["chat"]["id"]
-                )
+        return data.get(
+            "result",
+            []
+        )
 
     except Exception as e:
 
         print(
-            "Chat ID error:",
+            "Telegram updates:",
             e
         )
 
-    return None
+        return []
 
 
-def send_telegram(message):
+def telegram_send(
+    text,
+    chat_id=None
+):
 
-    chat_id = get_chat_id()
+    cid = chat_id or CHAT_ID
 
-    if not chat_id:
+    if not TOKEN:
 
         print(
-            "Chat ID bulunamadı."
+            "TELEGRAM_BOT_TOKEN bulunamadı."
         )
 
-        return
+        return False
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TOKEN}/sendMessage"
-    )
+    if not cid:
 
-    data = urllib.parse.urlencode({
-        "chat_id": chat_id,
-        "text": message
+        print(
+            "Telegram CHAT_ID bulunamadı."
+        )
+
+        return False
+
+    payload = urllib.parse.urlencode({
+        "chat_id": cid,
+        "text": text
     }).encode()
 
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="POST"
-    )
+    try:
 
-    with urllib.request.urlopen(
-        req,
-        timeout=20
-    ):
+        http_json(
+            f"{TELEGRAM}/bot{TOKEN}/sendMessage",
+            payload
+        )
+
+        return True
+
+    except Exception as e:
 
         print(
-            "Telegram mesajı gönderildi."
+            "Telegram gönderim hatası:",
+            e
         )
+
+        return False
+
+
+def handle_commands():
+
+    updates = telegram_updates()
+
+    for update in updates:
+
+        message = update.get(
+            "message"
+        ) or {}
+
+        text = (
+            message.get("text")
+            or ""
+        ).strip().lower()
+
+        chat = (
+            message.get("chat")
+            or {}
+        )
+
+        chat_id = str(
+            chat.get("id", "")
+        )
+
+        if not chat_id:
+            continue
+
+        if text.startswith("/start"):
+
+            telegram_send(
+                "✅ BİNANCE TARAMA BOTU ÇALIŞIYOR.\n\n"
+                "Her 15 dakikada piyasayı tarıyorum.\n\n"
+                "Aradığım şeyler:\n"
+                "• Erken momentum\n"
+                "• Hacim artışı\n"
+                "• Alıcı baskısı\n"
+                "• Sektör rotasyonu\n"
+                "• Yükselen sektörde geride kalan coinler\n"
+                "• Breakout hazırlığı\n"
+                "• Aşırı yükselmiş coinlerin elenmesi\n\n"
+                "⚠️ GitHub Actions sürekli çalışan bir servis değildir. "
+                "/start cevabı workflow'un bir sonraki çalışmasında gelir.",
+                chat_id
+            )
 
 
 # =========================================================
-# BINANCE KLINES
+# KLINE
 # =========================================================
 
 def get_klines(
     symbol,
     interval,
-    limit=200
+    limit=120
 ):
 
     params = urllib.parse.urlencode({
@@ -205,6 +251,10 @@ def get_klines(
     )
 
     data = get(url)
+
+    # Açık mum kullanılmıyor.
+    if len(data) > 2:
+        data = data[:-1]
 
     close = [
         float(x[4])
@@ -226,7 +276,7 @@ def get_klines(
         for x in data
     ]
 
-    taker_buy_volume = [
+    taker_buy = [
         float(x[9])
         for x in data
     ]
@@ -236,20 +286,26 @@ def get_klines(
         high,
         low,
         volume,
-        taker_buy_volume
+        taker_buy
     )
 
 
 # =========================================================
-# INDICATORS
+# EMA
 # =========================================================
 
 def ema(values, period):
 
-    if len(values) < period:
-        return values[-1]
+    if not values:
+        return 0
 
-    multiplier = 2 / (period + 1)
+    if len(values) < period:
+
+        return sum(values) / len(values)
+
+    multiplier = 2 / (
+        period + 1
+    )
 
     result = (
         sum(values[:period])
@@ -260,13 +316,22 @@ def ema(values, period):
 
         result = (
             value * multiplier
-            + result * (1 - multiplier)
+            + result * (
+                1 - multiplier
+            )
         )
 
     return result
 
 
-def rsi(values, period=14):
+# =========================================================
+# RSI
+# =========================================================
+
+def rsi(
+    values,
+    period=14
+):
 
     if len(values) <= period:
         return 50
@@ -274,7 +339,10 @@ def rsi(values, period=14):
     gains = []
     losses = []
 
-    for i in range(1, len(values)):
+    for i in range(
+        1,
+        len(values)
+    ):
 
         change = (
             values[i]
@@ -305,12 +373,16 @@ def rsi(values, period=14):
     ):
 
         avg_gain = (
-            avg_gain * (period - 1)
+            avg_gain * (
+                period - 1
+            )
             + gains[i]
         ) / period
 
         avg_loss = (
-            avg_loss * (period - 1)
+            avg_loss * (
+                period - 1
+            )
             + losses[i]
         ) / period
 
@@ -324,74 +396,26 @@ def rsi(values, period=14):
 
     return (
         100
-        - 100 / (1 + rs)
-    )
-
-
-def rsi_series(values, period=14):
-
-    result = []
-
-    for i in range(
-        period,
-        len(values)
-    ):
-
-        result.append(
-            rsi(
-                values[:i + 1],
-                period
-            )
+        - 100 / (
+            1 + rs
         )
-
-    return result
-
-
-def rsi_slope(values):
-
-    rs = rsi_series(values)
-
-    if len(rs) < 5:
-        return 0
-
-    return (
-        rs[-1]
-        - rs[-5]
     )
 
 
-def stoch_rsi(
-    values,
-    period=14
-):
-
-    rs = rsi_series(
-        values,
-        period
-    )
-
-    if len(rs) < period:
-        return 50
-
-    recent = rs[-period:]
-
-    low = min(recent)
-    high = max(recent)
-
-    if high == low:
-        return 50
-
-    return (
-        (rs[-1] - low)
-        /
-        (high - low)
-    ) * 100
-
+# =========================================================
+# MACD
+# =========================================================
 
 def macd(values):
 
     if len(values) < 35:
-        return 0, 0, 0
+
+        return (
+            0,
+            0,
+            0,
+            0
+        )
 
     macd_values = []
 
@@ -421,6 +445,16 @@ def macd(values):
         9
     )
 
+    previous = (
+        macd_values[-2]
+        if len(macd_values) > 1
+        else line
+    )
+
+    acceleration = (
+        line - previous
+    )
+
     histogram = (
         line - signal
     )
@@ -428,38 +462,14 @@ def macd(values):
     return (
         line,
         signal,
-        histogram
+        histogram,
+        acceleration
     )
 
 
-def macd_hist_acceleration(values):
-
-    if len(values) < 60:
-        return 0
-
-    histograms = []
-
-    for i in range(
-        35,
-        len(values)
-    ):
-
-        _, _, hist = macd(
-            values[:i]
-        )
-
-        histograms.append(
-            hist
-        )
-
-    if len(histograms) < 5:
-        return 0
-
-    return (
-        histograms[-1]
-        - histograms[-5]
-    )
-
+# =========================================================
+# BOLLINGER
+# =========================================================
 
 def bollinger(
     values,
@@ -474,7 +484,9 @@ def bollinger(
     )
 
     variance = sum(
-        (x - middle) ** 2
+        (
+            x - middle
+        ) ** 2
         for x in recent
     ) / len(recent)
 
@@ -492,27 +504,25 @@ def bollinger(
         - 2 * std
     )
 
+    width = (
+        4 * std
+        / middle
+        * 100
+        if middle
+        else 0
+    )
+
     return (
         upper,
         middle,
-        lower
+        lower,
+        width
     )
 
 
-def bb_width(values):
-
-    upper, middle, lower = bollinger(
-        values
-    )
-
-    if middle == 0:
-        return 0
-
-    return (
-        (upper - lower)
-        / middle
-    ) * 100
-
+# =========================================================
+# OBV
+# =========================================================
 
 def obv(
     values,
@@ -543,6 +553,10 @@ def obv(
     return output
 
 
+# =========================================================
+# ATR
+# =========================================================
+
 def atr(
     high,
     low,
@@ -551,6 +565,7 @@ def atr(
 ):
 
     if len(close) < period + 1:
+
         return 0
 
     trs = []
@@ -591,8 +606,15 @@ def adx_di(
     period=14
 ):
 
-    if len(close) < 40:
-        return 0, 0, 0
+    if len(close) < (
+        period * 2 + 5
+    ):
+
+        return (
+            0,
+            0,
+            0
+        )
 
     tr_list = []
     plus_dm = []
@@ -645,30 +667,55 @@ def adx_di(
             else 0
         )
 
-    atr_value = (
-        sum(tr_list[-period:])
-        / period
+    def di_at(index):
+
+        start = max(
+            0,
+            index - period + 1
+        )
+
+        tr_sum = sum(
+            tr_list[start:index + 1]
+        )
+
+        if tr_sum == 0:
+
+            return (
+                0,
+                0
+            )
+
+        plus = (
+            sum(
+                plus_dm[start:index + 1]
+            )
+            / tr_sum
+            * 100
+        )
+
+        minus = (
+            sum(
+                minus_dm[start:index + 1]
+            )
+            / tr_sum
+            * 100
+        )
+
+        return (
+            plus,
+            minus
+        )
+
+    plus_di, minus_di = di_at(
+        len(tr_list) - 1
     )
-
-    if atr_value == 0:
-        return 0, 0, 0
-
-    plus_di = (
-        sum(plus_dm[-period:])
-        / period
-    ) / atr_value * 100
-
-    minus_di = (
-        sum(minus_dm[-period:])
-        / period
-    ) / atr_value * 100
 
     dx_values = []
 
     start = max(
         0,
         len(tr_list)
-        - period * 3
+        - period * 2
     )
 
     for i in range(
@@ -676,65 +723,38 @@ def adx_di(
         len(tr_list)
     ):
 
-        a = max(
-            0,
-            i - period + 1
+        plus, minus = di_at(i)
+
+        denominator = (
+            plus + minus
         )
 
-        tr_sum = sum(
-            tr_list[a:i + 1]
-        )
-
-        p_sum = sum(
-            plus_dm[a:i + 1]
-        )
-
-        m_sum = sum(
-            minus_dm[a:i + 1]
-        )
-
-        if tr_sum == 0:
+        if denominator == 0:
             continue
 
-        pdi = (
-            p_sum
-            / tr_sum
+        dx = (
+            abs(
+                plus - minus
+            )
+            / denominator
             * 100
         )
 
-        mdi = (
-            m_sum
-            / tr_sum
-            * 100
-        )
-
-        den = pdi + mdi
-
-        if den == 0:
-            continue
-
-        dx_values.append(
-            abs(pdi - mdi)
-            / den
-            * 100
-        )
+        dx_values.append(dx)
 
     if not dx_values:
+
         return (
             0,
             plus_di,
             minus_di
         )
 
+    recent_dx = dx_values[-period:]
+
     adx_value = (
-        sum(
-            dx_values[-period:]
-        )
-        /
-        min(
-            period,
-            len(dx_values)
-        )
+        sum(recent_dx)
+        / len(recent_dx)
     )
 
     return (
@@ -761,1296 +781,56 @@ def vwap(
         len(close) - period
     )
 
-    pv = 0
-    total_volume = 0
+    cumulative_pv = 0
+    cumulative_volume = 0
 
     for i in range(
         start,
         len(close)
     ):
 
-        typical = (
+        typical_price = (
             high[i]
             + low[i]
             + close[i]
         ) / 3
 
-        pv += (
-            typical
+        cumulative_pv += (
+            typical_price
             * volume[i]
         )
 
-        total_volume += (
+        cumulative_volume += (
             volume[i]
         )
 
-    if total_volume == 0:
+    if cumulative_volume == 0:
+
         return close[-1]
 
     return (
-        pv
-        / total_volume
+        cumulative_pv
+        / cumulative_volume
     )
 
 
 # =========================================================
-# SUPERTREND
+# YARDIMCI
 # =========================================================
 
-def supertrend(
-    high,
-    low,
-    close,
-    period=10,
-    multiplier=3
+def percent_change(
+    current,
+    previous
 ):
 
-    atr_value = atr(
-        high,
-        low,
-        close,
-        period
-    )
-
-    if atr_value <= 0:
-        return False
-
-    hl2 = (
-        high[-1]
-        + low[-1]
-    ) / 2
-
-    lower = (
-        hl2
-        - multiplier * atr_value
-    )
-
-    return close[-1] > lower
-
-
-# =========================================================
-# TAKER BUY PRESSURE
-# =========================================================
-
-def taker_buy_ratio(
-    volume,
-    taker_buy
-):
-
-    if not volume:
-        return 0.5
-
-    total = sum(
-        volume[-5:]
-    )
-
-    buy = sum(
-        taker_buy[-5:]
-    )
-
-    if total <= 0:
-        return 0.5
-
-    return buy / total
-
-
-# =========================================================
-# MOMENTUM
-# =========================================================
-
-def momentum(values, bars=5):
-
-    if len(values) <= bars:
+    if previous == 0:
         return 0
 
     return (
-        values[-1]
-        / values[-1 - bars]
+        current / previous
         - 1
     ) * 100
 
-
-def momentum_acceleration(values):
-
-    if len(values) < 15:
-        return 0
-
-    m1 = momentum(
-        values,
-        5
-    )
-
-    m2 = momentum(
-        values[:-5],
-        5
-    )
-
-    return m1 - m2
-
-
-# =========================================================
-# CORRELATION
-# =========================================================
-
-def correlation(a, b):
-
-    n = min(
-        len(a),
-        len(b)
-    )
-
-    if n < 20:
-        return 0
-
-    a = a[-n:]
-    b = b[-n:]
-
-    ma = statistics.mean(a)
-    mb = statistics.mean(b)
-
-    numerator = sum(
-        (x - ma)
-        * (y - mb)
-        for x, y in zip(a, b)
-    )
-
-    den_a = math.sqrt(
-        sum(
-            (x - ma) ** 2
-            for x in a
-        )
-    )
-
-    den_b = math.sqrt(
-        sum(
-            (y - mb) ** 2
-            for y in b
-        )
-    )
-
-    denominator = (
-        den_a
-        * den_b
-    )
-
-    if denominator == 0:
-        return 0
-
-    return (
-        numerator
-        / denominator
-    )
-
-
-# =========================================================
-# LEADER / FOLLOWER
-# =========================================================
-
-def detect_leader_follower(
-    leader_close,
-    follower_close
-):
-
-    if (
-        len(leader_close) < 80
-        or len(follower_close) < 80
-    ):
-        return None
-
-    best_corr = 0
-    best_lag = 0
-
-    # 1 candle = 15 minutes
-    for lag in range(
-        1,
-        9
-    ):
-
-        leader_returns = []
-
-        follower_returns = []
-
-        for i in range(
-            1,
-            min(
-                len(leader_close),
-                len(follower_close)
-            )
-            - lag
-        ):
-
-            lr = (
-                leader_close[i]
-                / leader_close[i - 1]
-                - 1
-            )
-
-            fr = (
-                follower_close[i + lag]
-                / follower_close[i + lag - 1]
-                - 1
-            )
-
-            leader_returns.append(lr)
-            follower_returns.append(fr)
-
-        corr = correlation(
-            leader_returns,
-            follower_returns
-        )
-
-        if corr > best_corr:
-            best_corr = corr
-            best_lag = lag
-
-    if best_corr < 0.55:
-        return None
-
-    leader_mom = momentum(
-        leader_close,
-        4
-    )
-
-    follower_mom = momentum(
-        follower_close,
-        4
-    )
-
-    if leader_mom < 1:
-        return None
-
-    if follower_mom > leader_mom * 0.8:
-        return None
-
-    return {
-        "correlation": best_corr,
-        "lag": best_lag * 15,
-        "leader_momentum": leader_mom,
-        "follower_momentum": follower_mom
-    }
-
-
-# =========================================================
-# LUNARCRUSH
-# =========================================================
-
-def lunar_get(
-    endpoint,
-    params=None
-):
-
-    if not LUNAR_KEY:
-        return None
-
-    try:
-
-        if params:
-
-            endpoint += (
-                "?"
-                + urllib.parse.urlencode(
-                    params
-                )
-            )
-
-        url = (
-            LUNAR_BASE
-            + endpoint
-        )
-
-        return get(
-            url,
-            headers={
-                "Authorization":
-                f"Bearer {LUNAR_KEY}"
-            }
-        )
-
-    except Exception as e:
-
-        print(
-            "LunarCrush error:",
-            e
-        )
-
-        return None
-
-
-def load_social_data():
-
-    if not LUNAR_KEY:
-        return {}
-
-    data = lunar_get(
-        "/public/coins/list/v1"
-    )
-
-    if not data:
-        return {}
-
-    rows = data.get(
-        "data",
-        []
-    )
-
-    result = {}
-
-    for row in rows:
-
-        symbol = str(
-            row.get(
-                "symbol",
-                ""
-            )
-        ).upper()
-
-        if not symbol:
-            continue
-
-        result[symbol] = row
-
-    print(
-        f"LunarCrush: "
-        f"{len(result)} coin sosyal verisi."
-    )
-
-    return result
-
-
-# =========================================================
-# SECTOR
-# =========================================================
-
-def detect_sector(
-    symbol,
-    social=None
-):
-
-    if social:
-
-        categories = social.get(
-            "categories",
-            []
-        )
-
-        text = " ".join(
-            str(x).lower()
-            for x in categories
-        )
-
-        for sector, keywords in (
-            SECTOR_KEYWORDS.items()
-        ):
-
-            for keyword in keywords:
-
-                if keyword.lower() in text:
-                    return sector
-
-    upper = symbol.upper()
-
-    for sector, keywords in (
-        SECTOR_KEYWORDS.items()
-    ):
-
-        for keyword in keywords:
-
-            key = (
-                keyword
-                .upper()
-                .replace(" ", "")
-            )
-
-            if (
-                key
-                and key in upper
-            ):
-                return sector
-
-    return "OTHER"
-
-
-# =========================================================
-# SOCIAL SCORE
-# =========================================================
-
-def social_score(row):
-
-    if not row:
-        return 0
-
-    sentiment = float(
-        row.get(
-            "sentiment",
-            50
-        ) or 50
-    )
-
-    social_volume = float(
-        row.get(
-            "social_volume_24h",
-            0
-        ) or 0
-    )
-
-    interactions = float(
-        row.get(
-            "interactions_24h",
-            0
-        ) or 0
-    )
-
-    galaxy = float(
-        row.get(
-            "galaxy_score",
-            0
-        ) or 0
-    )
-
-    score = 0
-
-    if sentiment >= 70:
-        score += 20
-    elif sentiment >= 60:
-        score += 12
-    elif sentiment >= 55:
-        score += 6
-
-    if galaxy >= 70:
-        score += 20
-    elif galaxy >= 60:
-        score += 14
-    elif galaxy >= 50:
-        score += 8
-
-    if social_volume > 0:
-        score += 10
-
-    if interactions > 0:
-        score += 10
-
-    return min(
-        60,
-        score
-    )
-
-
-# =========================================================
-# TECHNICAL ANALYSIS
-# =========================================================
-
-def technical_analysis(
-    symbol
-):
-
-    try:
-
-        (
-            close,
-            high,
-            low,
-            volume,
-            taker_buy
-        ) = get_klines(
-            symbol,
-            "15m",
-            200
-        )
-
-        (
-            close1h,
-            high1h,
-            low1h,
-            vol1h,
-            taker1h
-        ) = get_klines(
-            symbol,
-            "1h",
-            120
-        )
-
-        (
-            close4h,
-            high4h,
-            low4h,
-            vol4h,
-            taker4h
-        ) = get_klines(
-            symbol,
-            "4h",
-            120
-        )
-
-        price = close[-1]
-
-        # RSI
-        r15 = rsi(close)
-        r1h = rsi(close1h)
-        r4h = rsi(close4h)
-
-        rsi_change = rsi_slope(
-            close
-        )
-
-        # EMA
-        e9 = ema(
-            close,
-            9
-        )
-
-        e21 = ema(
-            close,
-            21
-        )
-
-        e50 = ema(
-            close,
-            50
-        )
-
-        e21_4h = ema(
-            close4h,
-            21
-        )
-
-        e50_4h = ema(
-            close4h,
-            50
-        )
-
-        # MACD
-        macd_line, macd_signal, macd_hist = macd(
-            close
-        )
-
-        macd_acc = macd_hist_acceleration(
-            close
-        )
-
-        # BB
-        upper, middle, lower = bollinger(
-            close
-        )
-
-        bb_width_now = bb_width(
-            close
-        )
-
-        bb_width_old = bb_width(
-            close[:-10]
-        )
-
-        bb_squeeze = (
-            bb_width_now
-            < bb_width_old
-        )
-
-        # OBV
-        obv_values = obv(
-            close,
-            volume
-        )
-
-        obv_rising = (
-            obv_values[-1]
-            > obv_values[-10]
-        )
-
-        # ATR
-        atr_value = atr(
-            high,
-            low,
-            close
-        )
-
-        # ADX
-        adx_value, plus_di, minus_di = adx_di(
-            high,
-            low,
-            close
-        )
-
-        # VWAP
-        current_vwap = vwap(
-            high,
-            low,
-            close,
-            volume
-        )
-
-        # Volume
-        avg_volume = (
-            sum(volume[-21:-1])
-            / 20
-        )
-
-        volume_ratio = (
-            volume[-1]
-            / avg_volume
-            if avg_volume > 0
-            else 1
-        )
-
-        previous_avg = (
-            sum(volume[-11:-1])
-            / 10
-        )
-
-        volume_acceleration = (
-            volume[-1]
-            / previous_avg
-            if previous_avg > 0
-            else 1
-        )
-
-        # Momentum
-        mom = momentum(
-            close,
-            5
-        )
-
-        mom_acc = momentum_acceleration(
-            close
-        )
-
-        # Taker buy
-        taker_ratio = taker_buy_ratio(
-            volume,
-            taker_buy
-        )
-
-        # Stoch
-        stoch = stoch_rsi(
-            close
-        )
-
-        # Supertrend
-        supertrend_up = supertrend(
-            high,
-            low,
-            close
-        )
-
-        # Fresh breakout
-        resistance = max(
-            high[-25:-1]
-        )
-
-        support = min(
-            low[-25:-1]
-        )
-
-        fresh_long = (
-            price > resistance
-            and volume_ratio >= 1.5
-        )
-
-        fresh_short = (
-            price < support
-            and volume_ratio >= 1.5
-        )
-
-        # Early long
-        early_score = 0
-        early_reasons = []
-
-        if (
-            50 <= r15 <= 65
-            and rsi_change > 2
-        ):
-
-            early_score += 12
-            early_reasons.append(
-                "RSI yükseliyor"
-            )
-
-        if (
-            price > e21
-            and e9 > e21
-        ):
-
-            early_score += 10
-            early_reasons.append(
-                "EMA trend"
-            )
-
-        if macd_acc > 0:
-
-            early_score += 10
-            early_reasons.append(
-                "MACD hızlanıyor"
-            )
-
-        if obv_rising:
-
-            early_score += 10
-            early_reasons.append(
-                "OBV yükseliyor"
-            )
-
-        if (
-            volume_ratio >= 1.3
-            and volume_acceleration >= 1.3
-        ):
-
-            early_score += 12
-            early_reasons.append(
-                "Hacim uyanıyor"
-            )
-
-        if taker_ratio >= 0.53:
-
-            early_score += 10
-            early_reasons.append(
-                "Taker buy baskısı"
-            )
-
-        if bb_squeeze:
-
-            early_score += 8
-            early_reasons.append(
-                "BB sıkışması"
-            )
-
-        if (
-            mom > 0
-            and mom < 3
-            and mom_acc > 0
-        ):
-
-            early_score += 10
-            early_reasons.append(
-                "Momentum hızlanıyor"
-            )
-
-        if (
-            price > current_vwap
-        ):
-
-            early_score += 8
-            early_reasons.append(
-                "VWAP üstü"
-            )
-
-        if (
-            adx_value >= 20
-            and plus_di > minus_di
-        ):
-
-            early_score += 8
-            early_reasons.append(
-                "ADX/DI"
-            )
-
-        if (
-            r4h > 50
-            and price > e50
-        ):
-
-            early_score += 8
-            early_reasons.append(
-                "Üst zaman trendi"
-            )
-
-        early_score = min(
-            100,
-            early_score
-        )
-
-        return {
-            "symbol": symbol,
-            "price": price,
-
-            "rsi15": r15,
-            "rsi1h": r1h,
-            "rsi4h": r4h,
-            "rsi_change": rsi_change,
-
-            "ema9": e9,
-            "ema21": e21,
-            "ema50": e50,
-
-            "macd_hist": macd_hist,
-            "macd_acc": macd_acc,
-
-            "bb_width": bb_width_now,
-            "bb_squeeze": bb_squeeze,
-
-            "obv_rising": obv_rising,
-
-            "atr": atr_value,
-
-            "adx": adx_value,
-            "plus_di": plus_di,
-            "minus_di": minus_di,
-
-            "vwap": current_vwap,
-
-            "volume": volume_ratio,
-            "volume_acceleration":
-                volume_acceleration,
-
-            "momentum": mom,
-            "momentum_acceleration":
-                mom_acc,
-
-            "taker_ratio":
-                taker_ratio,
-
-            "stoch": stoch,
-
-            "supertrend":
-                supertrend_up,
-
-            "fresh_long":
-                fresh_long,
-
-            "fresh_short":
-                fresh_short,
-
-            "early_score":
-                early_score,
-
-            "early_reasons":
-                early_reasons,
-
-            "close15":
-                close,
-
-            "close1h":
-                close1h,
-
-            "close4h":
-                close4h
-        }
-
-    except Exception as e:
-
-        print(
-            f"{symbol} teknik hata:",
-            e
-        )
-
-        return None
-
-
-# =========================================================
-# MARKET REGIME
-# =========================================================
-
-def market_regime():
-
-    try:
-
-        btc = technical_analysis(
-            "BTCUSDT"
-        )
-
-        eth = technical_analysis(
-            "ETHUSDT"
-        )
-
-        if not btc or not eth:
-            return None
-
-        score = 0
-
-        if btc["momentum"] > 0:
-            score += 1
-
-        if btc["price"] > btc["ema21"]:
-            score += 1
-
-        if btc["rsi15"] > 50:
-            score += 1
-
-        if btc["plus_di"] > btc["minus_di"]:
-            score += 1
-
-        if eth["momentum"] > 0:
-            score += 1
-
-        return {
-            "score": score,
-            "btc": btc,
-            "eth": eth
-        }
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
-# SECTOR ROTATION
-# =========================================================
-
-def sector_rotation(
-    results,
-    social_data
-):
-
-    sectors = {}
-
-    for result in results:
-
-        symbol = result["symbol"]
-
-        base = symbol.replace(
-            "USDT",
-            ""
-        )
-
-        social = social_data.get(
-            base,
-            {}
-        )
-
-        sector = detect_sector(
-            base,
-            social
-        )
-
-        if sector == "OTHER":
-            continue
-
-        if sector not in sectors:
-            sectors[sector] = []
-
-        sectors[sector].append(
-            result
-        )
-
-    sector_stats = {}
-
-    for sector, coins in sectors.items():
-
-        if len(coins) < 3:
-            continue
-
-        avg_momentum = statistics.mean(
-            x["momentum"]
-            for x in coins
-        )
-
-        avg_volume = statistics.mean(
-            x["volume"]
-            for x in coins
-        )
-
-        sector_stats[sector] = {
-            "momentum":
-                avg_momentum,
-            "volume":
-                avg_volume,
-            "coins":
-                coins
-        }
-
-    return sector_stats
-
-
-# =========================================================
-# EARLY RADAR
-# =========================================================
-
-def build_early_radar(
-    results,
-    social_data,
-    sector_stats,
-    market
-):
-
-    radar = []
-
-    market_bonus = 0
-
-    if market:
-
-        if market["score"] >= 4:
-            market_bonus = 10
-
-        elif market["score"] >= 3:
-            market_bonus = 6
-
-    for result in results:
-
-        symbol = result["symbol"]
-
-        base = symbol.replace(
-            "USDT",
-            ""
-        )
-
-        social = social_data.get(
-            base
-        )
-
-        score = (
-            result["early_score"]
-        )
-
-        reasons = list(
-            result["early_reasons"]
-        )
-
-        # Market
-        score += market_bonus
-
-        if market_bonus:
-            reasons.append(
-                "Market rejimi pozitif"
-            )
-
-        # Sector
-        sector = detect_sector(
-            base,
-            social
-        )
-
-        stats = sector_stats.get(
-            sector
-        )
-
-        if stats:
-
-            sector_momentum = (
-                stats["momentum"]
-            )
-
-            # Sector güçlü,
-            # coin henüz gerideyse
-            if (
-                sector_momentum >= 1.5
-                and result["momentum"]
-                < sector_momentum * 0.65
-            ):
-
-                score += 15
-
-                reasons.append(
-                    f"{sector} sektör gerisinde"
-                )
-
-            elif (
-                sector_momentum >= 2
-                and result["momentum"]
-                > 0
-            ):
-
-                score += 6
-
-                reasons.append(
-                    f"{sector} güçlü"
-                )
-
-        # Social
-        s_score = social_score(
-            social
-        )
-
-        if s_score >= 25:
-
-            score += min(
-                15,
-                s_score // 2
-            )
-
-            reasons.append(
-                "Sosyal aktivite"
-            )
-
-        # Overextension filter
-        if (
-            result["momentum"] > 7
-            or result["rsi15"] > 75
-        ):
-
-            score -= 20
-
-        # Need minimum movement
-        if result["momentum"] < -3:
-            score -= 10
-
-        score = max(
-            0,
-            min(100, score)
-        )
-
-        if score >= 65:
-
-            radar.append({
-                "symbol":
-                    symbol,
-
-                "score":
-                    score,
-
-                "sector":
-                    sector,
-
-                "momentum":
-                    result["momentum"],
-
-                "volume":
-                    result["volume"],
-
-                "reasons":
-                    reasons[:8],
-
-                "social":
-                    social,
-
-                "technical":
-                    result
-            })
-
-    radar.sort(
-        key=lambda x:
-        x["score"],
-        reverse=True
-    )
-
-    return radar[:5]
-
-
-# =========================================================
-# FOLLOWER RADAR
-# =========================================================
-
-def follower_radar(
-    results
-):
-
-    if len(results) < 5:
-        return []
-
-    leaders = sorted(
-        results,
-        key=lambda x:
-        x["momentum"],
-        reverse=True
-    )[:12]
-
-    followers = sorted(
-        results,
-        key=lambda x:
-        x["momentum"]
-    )[:MAX_FOLLOWER_COINS]
-
-    output = []
-
-    cache = {}
-
-    for leader in leaders:
-
-        if leader["momentum"] < 1:
-            continue
-
-        for follower in followers:
-
-            if (
-                leader["symbol"]
-                == follower["symbol"]
-            ):
-                continue
-
-            key = (
-                leader["symbol"],
-                follower["symbol"]
-            )
-
-            try:
-
-                lc = cache.get(
-                    leader["symbol"]
-                )
-
-                if lc is None:
-
-                    lc = get_klines(
-                        leader["symbol"],
-                        "15m",
-                        100
-                    )[0]
-
-                    cache[
-                        leader["symbol"]
-                    ] = lc
-
-                fc = cache.get(
-                    follower["symbol"]
-                )
-
-                if fc is None:
-
-                    fc = get_klines(
-                        follower["symbol"],
-                        "15m",
-                        100
-                    )[0]
-
-                    cache[
-                        follower["symbol"]
-                    ] = fc
-
-                relation = detect_leader_follower(
-                    lc,
-                    fc
-                )
-
-                if not relation:
-                    continue
-
-                output.append({
-                    "leader":
-                        leader["symbol"],
-
-                    "follower":
-                        follower["symbol"],
-
-                    "correlation":
-                        relation[
-                            "correlation"
-                        ],
-
-                    "lag":
-                        relation["lag"],
-
-                    "leader_momentum":
-                        relation[
-                            "leader_momentum"
-                        ],
-
-                    "follower_momentum":
-                        relation[
-                            "follower_momentum"
-                        ]
-                })
-
-            except Exception as e:
-
-                print(
-                    "Follower error:",
-                    key,
-                    e
-                )
-
-    output.sort(
-        key=lambda x:
-        (
-            x["correlation"],
-            x["leader_momentum"]
-        ),
-        reverse=True
-    )
-
-    return output[:5]
-
-
-# =========================================================
-# PRICE FORMAT
-# =========================================================
 
 def price_format(value):
 
@@ -2066,32 +846,821 @@ def price_format(value):
     return f"{value:.10f}"
 
 
+def get_sector(symbol):
+
+    if symbol.endswith("USDT"):
+
+        base = symbol[:-4]
+
+    else:
+
+        base = symbol
+
+    for name, coins in SECTORS.items():
+
+        if base in coins:
+
+            return name
+
+    return "OTHER"
+
+
 # =========================================================
-# MAIN
+# BTC / ETH MARKET
 # =========================================================
 
-def main():
+def market_snapshot():
 
-    print(
-        "🚀 EARLY BINANCE "
-        "INTELLIGENCE SCANNER"
-    )
+    market = {}
 
-    # -----------------------------------------------------
-    # MARKET
-    # -----------------------------------------------------
+    for symbol in (
+        "BTCUSDT",
+        "ETHUSDT"
+    ):
 
-    market = market_regime()
+        close, _, _, _, _ = (
+            get_klines(
+                symbol,
+                "15m",
+                80
+            )
+        )
 
-    # -----------------------------------------------------
-    # SOCIAL
-    # -----------------------------------------------------
+        market[symbol] = {
 
-    social_data = load_social_data()
+            "price": close[-1],
 
-    # -----------------------------------------------------
-    # BINANCE 24H
-    # -----------------------------------------------------
+            "momentum":
+                percent_change(
+                    close[-1],
+                    close[-5]
+                ),
+
+            "rsi":
+                rsi(close)
+        }
+
+    return market
+
+
+# =========================================================
+# COIN ANALİZİ
+# =========================================================
+
+def analyze(
+    symbol,
+    market
+):
+
+    try:
+
+        close, high, low, volume, taker = (
+            get_klines(
+                symbol,
+                "15m",
+                120
+            )
+        )
+
+        close1h, _, _, _, _ = (
+            get_klines(
+                symbol,
+                "1h",
+                80
+            )
+        )
+
+        close4h, _, _, _, _ = (
+            get_klines(
+                symbol,
+                "4h",
+                80
+            )
+        )
+
+        if len(close) < 60:
+
+            return None
+
+        price = close[-1]
+
+        # -------------------------------------------------
+        # RSI
+        # -------------------------------------------------
+
+        rsi15 = rsi(close)
+
+        rsi_previous = rsi(
+            close[:-5]
+        )
+
+        rsi_delta = (
+            rsi15
+            - rsi_previous
+        )
+
+        rsi1h = rsi(
+            close1h
+        )
+
+        rsi4h = rsi(
+            close4h
+        )
+
+        # -------------------------------------------------
+        # EMA
+        # -------------------------------------------------
+
+        ema9 = ema(
+            close,
+            9
+        )
+
+        ema21 = ema(
+            close,
+            21
+        )
+
+        ema50 = ema(
+            close,
+            50
+        )
+
+        ema21_1h = ema(
+            close1h,
+            21
+        )
+
+        ema50_1h = ema(
+            close1h,
+            50
+        )
+
+        # -------------------------------------------------
+        # MACD
+        # -------------------------------------------------
+
+        (
+            macd_line,
+            macd_signal,
+            macd_hist,
+            macd_acceleration
+        ) = macd(close)
+
+        (
+            _,
+            _,
+            _,
+            macd_acceleration_1h
+        ) = macd(close1h)
+
+        # -------------------------------------------------
+        # BOLLINGER
+        # -------------------------------------------------
+
+        (
+            upper,
+            middle,
+            lower,
+            bb_width
+        ) = bollinger(
+            close
+        )
+
+        # -------------------------------------------------
+        # OBV
+        # -------------------------------------------------
+
+        obv_values = obv(
+            close,
+            volume
+        )
+
+        obv_slope = (
+            percent_change(
+                obv_values[-1],
+                obv_values[-6]
+            )
+            if obv_values[-6] != 0
+            else 0
+        )
+
+        # -------------------------------------------------
+        # ADX
+        # -------------------------------------------------
+
+        (
+            adx_value,
+            plus_di,
+            minus_di
+        ) = adx_di(
+            high,
+            low,
+            close
+        )
+
+        # -------------------------------------------------
+        # VWAP
+        # -------------------------------------------------
+
+        current_vwap = vwap(
+            high,
+            low,
+            close,
+            volume
+        )
+
+        # -------------------------------------------------
+        # HACİM
+        # -------------------------------------------------
+
+        average_volume = (
+            sum(
+                volume[-21:-1]
+            )
+            / 20
+        )
+
+        if average_volume <= 0:
+
+            return None
+
+        volume_ratio = (
+            volume[-1]
+            / average_volume
+        )
+
+        previous_volume = (
+            sum(
+                volume[-11:-1]
+            )
+            / 10
+        )
+
+        volume_acceleration = (
+            volume[-1]
+            / previous_volume
+            if previous_volume > 0
+            else 1
+        )
+
+        # -------------------------------------------------
+        # MOMENTUM
+        # -------------------------------------------------
+
+        momentum = percent_change(
+            price,
+            close[-5]
+        )
+
+        previous_momentum = percent_change(
+            close[-5],
+            close[-9]
+        )
+
+        momentum_acceleration = (
+            momentum
+            - previous_momentum
+        )
+
+        # -------------------------------------------------
+        # TAKER BUY
+        # -------------------------------------------------
+
+        if volume[-1] > 0:
+
+            taker_buy_percent = (
+                taker[-1]
+                / volume[-1]
+                * 100
+            )
+
+        else:
+
+            taker_buy_percent = 50
+
+        total_taker_volume = sum(
+            taker[-6:]
+        )
+
+        total_volume = sum(
+            volume[-6:]
+        )
+
+        if total_volume > 0:
+
+            recent_taker_percent = (
+                total_taker_volume
+                / total_volume
+                * 100
+            )
+
+        else:
+
+            recent_taker_percent = 50
+
+        taker_delta = (
+            taker_buy_percent
+            - recent_taker_percent
+        )
+
+        # -------------------------------------------------
+        # TREND
+        # -------------------------------------------------
+
+        trend15 = (
+            price > ema9
+            and ema9 > ema21
+        )
+
+        trend1h = (
+            close1h[-1]
+            > ema21_1h
+            > ema50_1h
+        )
+
+        # -------------------------------------------------
+        # SCORE
+        # -------------------------------------------------
+
+        score = 0
+
+        reasons = []
+
+        # RSI yükseliyor
+        if rsi_delta >= 5:
+
+            score += 14
+
+            reasons.append(
+                "RSI güçlü yükseliyor"
+            )
+
+        elif rsi_delta >= 3:
+
+            score += 9
+
+            reasons.append(
+                "RSI yükseliyor"
+            )
+
+        # 15 dk trend
+        if trend15:
+
+            score += 10
+
+            reasons.append(
+                "15dk trend yukarı"
+            )
+
+        # 1 saat trend
+        if trend1h:
+
+            score += 10
+
+            reasons.append(
+                "1s trend yukarı"
+            )
+
+        # MACD
+        if (
+            macd_hist > 0
+            and macd_acceleration > 0
+        ):
+
+            score += 9
+
+            reasons.append(
+                "MACD hızlanıyor"
+            )
+
+        # OBV
+        if obv_slope > 0:
+
+            score += 9
+
+            reasons.append(
+                "OBV yükseliyor"
+            )
+
+        # Hacim
+        if volume_ratio >= 2:
+
+            score += 10
+
+            reasons.append(
+                "Hacim güçlü"
+            )
+
+        elif volume_ratio >= 1.5:
+
+            score += 7
+
+            reasons.append(
+                "Hacim uyanıyor"
+            )
+
+        elif volume_ratio >= 1.2:
+
+            score += 4
+
+            reasons.append(
+                "Hacim artıyor"
+            )
+
+        # Hacim ivmesi
+        if volume_acceleration >= 2:
+
+            score += 8
+
+            reasons.append(
+                "Hacim ivmesi güçlü"
+            )
+
+        elif volume_acceleration >= 1.5:
+
+            score += 5
+
+            reasons.append(
+                "Hacim ivmesi"
+            )
+
+        # Taker buy
+        if taker_buy_percent >= 56:
+
+            score += 9
+
+            reasons.append(
+                "Güçlü alıcı baskısı"
+            )
+
+        elif taker_buy_percent >= 53:
+
+            score += 6
+
+            reasons.append(
+                "Alıcı baskısı"
+            )
+
+        # Sağlıklı momentum
+        if (
+            momentum >= 0.4
+            and momentum <= 4
+        ):
+
+            score += 8
+
+            reasons.append(
+                "Sağlıklı momentum"
+            )
+
+        # Momentum hızlanması
+        if momentum_acceleration >= 0.2:
+
+            score += 7
+
+            reasons.append(
+                "Momentum hızlanıyor"
+            )
+
+        # VWAP
+        if price > current_vwap:
+
+            score += 5
+
+            reasons.append(
+                "VWAP üstü"
+            )
+
+        # ADX / DI
+        if (
+            adx_value >= 25
+            and plus_di > minus_di
+        ):
+
+            score += 7
+
+            reasons.append(
+                "ADX/DI pozitif"
+            )
+
+        elif (
+            adx_value >= 20
+            and plus_di > minus_di
+        ):
+
+            score += 4
+
+            reasons.append(
+                "Trend güçleniyor"
+            )
+
+        # BB sıkışması
+        if bb_width < 4:
+
+            score += 5
+
+            reasons.append(
+                "Bollinger sıkışması"
+            )
+
+        # =================================================
+        # AŞIRI UZAMA CEZALARI
+        # =================================================
+
+        extension = (
+            (
+                price
+                / ema21
+            ) - 1
+        ) * 100
+
+        if extension > 5:
+
+            score -= 15
+
+            reasons.append(
+                "Aşırı yükselme cezası"
+            )
+
+        elif extension > 3:
+
+            score -= 7
+
+            reasons.append(
+                "Uzatma riski"
+            )
+
+        if rsi15 > 72:
+
+            score -= 12
+
+            reasons.append(
+                "RSI aşırı yüksek"
+            )
+
+        elif rsi15 > 68:
+
+            score -= 5
+
+            reasons.append(
+                "RSI yükseldi"
+            )
+
+        if momentum > 5:
+
+            score -= 15
+
+            reasons.append(
+                "Momentum fazla hızlı"
+            )
+
+        # =================================================
+        # ALT SINIR
+        # =================================================
+
+        score = max(
+            0,
+            min(
+                100,
+                score
+            )
+        )
+
+        return {
+
+            "symbol":
+                symbol,
+
+            "price":
+                price,
+
+            "sector":
+                get_sector(symbol),
+
+            "score":
+                score,
+
+            "momentum":
+                momentum,
+
+            "momentum_acc":
+                momentum_acceleration,
+
+            "rsi":
+                rsi15,
+
+            "rsi_delta":
+                rsi_delta,
+
+            "adx":
+                adx_value,
+
+            "volume":
+                volume_ratio,
+
+            "volume_acc":
+                volume_acceleration,
+
+            "taker":
+                taker_buy_percent,
+
+            "taker_delta":
+                taker_delta,
+
+            "bb_width":
+                bb_width,
+
+            "vwap":
+                current_vwap,
+
+            "reasons":
+                reasons,
+
+            "trend":
+                (
+                    trend15
+                    and trend1h
+                )
+        }
+
+    except Exception as e:
+
+        print(
+            f"{symbol} analiz hatası:",
+            e
+        )
+
+        return None
+
+
+# =========================================================
+# SEKTÖR İSTATİSTİKLERİ
+# =========================================================
+
+def sector_statistics(
+    results
+):
+
+    groups = {}
+
+    for coin in results:
+
+        groups.setdefault(
+            coin["sector"],
+            []
+        ).append(coin)
+
+    statistics = {}
+
+    for sector_name, coins in groups.items():
+
+        if len(coins) < 2:
+
+            continue
+
+        statistics[
+            sector_name
+        ] = {
+
+            "momentum":
+                sum(
+                    x["momentum"]
+                    for x in coins
+                )
+                / len(coins),
+
+            "volume":
+                sum(
+                    x["volume"]
+                    for x in coins
+                )
+                / len(coins),
+
+            "count":
+                len(coins)
+        }
+
+    return statistics
+
+
+# =========================================================
+# GÖRECELİ GÜÇ / GERİDE KALAN
+# =========================================================
+
+def relative_strength(
+    results,
+    statistics
+):
+
+    for coin in results:
+
+        sector_data = statistics.get(
+            coin["sector"]
+        )
+
+        coin["relative"] = 0
+
+        if not sector_data:
+
+            coin["laggard"] = False
+
+            continue
+
+        sector_momentum = (
+            sector_data["momentum"]
+        )
+
+        coin["relative"] = (
+            coin["momentum"]
+            - sector_momentum
+        )
+
+        # Sektör yükseliyor.
+        # Coin geride.
+        # Ama coin içinde toparlanma belirtileri var.
+        if (
+            sector_momentum > 0.8
+            and coin["momentum"]
+            < sector_momentum - 0.5
+            and coin["volume"] >= 1.2
+            and coin["rsi_delta"] >= 2
+        ):
+
+            coin["laggard"] = True
+
+            coin["score"] = min(
+                100,
+                coin["score"] + 10
+            )
+
+            coin["reasons"].append(
+                "Yükselen sektörde geride"
+            )
+
+        else:
+
+            coin["laggard"] = False
+
+    return results
+
+
+# =========================================================
+# MARKET SCORE
+# =========================================================
+
+def market_score(
+    market
+):
+
+    score = 0
+
+    if (
+        market["BTCUSDT"]["momentum"]
+        > 0
+    ):
+
+        score += 1
+
+    if (
+        market["BTCUSDT"]["rsi"]
+        > 50
+    ):
+
+        score += 1
+
+    if (
+        market["ETHUSDT"]["momentum"]
+        > 0
+    ):
+
+        score += 1
+
+    if (
+        market["ETHUSDT"]["rsi"]
+        > 50
+    ):
+
+        score += 1
+
+    if (
+        market["BTCUSDT"]["momentum"]
+        > -1
+    ):
+
+        score += 1
+
+    return score
+
+
+# =========================================================
+# TARAMA
+# =========================================================
+
+def scan():
+
+    # Telegram komutlarını kontrol et
+    handle_commands()
 
     tickers = get(
         BINANCE
@@ -2102,26 +1671,15 @@ def main():
 
     for ticker in tickers:
 
-        symbol = ticker["symbol"]
+        symbol = ticker.get(
+            "symbol",
+            ""
+        )
 
         if not symbol.endswith(
             "USDT"
         ):
-            continue
 
-        if symbol in {
-            "BTCUSDT",
-            "ETHUSDT"
-        }:
-            continue
-
-        if (
-            symbol.replace(
-                "USDT",
-                ""
-            )
-            in STABLECOINS
-        ):
             continue
 
         if any(
@@ -2133,49 +1691,54 @@ def main():
                 "BEARUSDT"
             ]
         ):
+
+            continue
+
+        base = symbol[:-4]
+
+        if base in STABLECOINS:
+
             continue
 
         try:
 
-            qv = float(
+            quote_volume = float(
                 ticker[
                     "quoteVolume"
                 ]
             )
 
-            if qv < MIN_24H_QUOTE_VOLUME:
+            if quote_volume < 3_000_000:
+
                 continue
 
             candidates.append(
                 (
                     symbol,
-                    qv
+                    quote_volume
                 )
             )
 
         except Exception:
+
             continue
 
     candidates.sort(
-        key=lambda x:
-        x[1],
+        key=lambda x: x[1],
         reverse=True
     )
 
     candidates = candidates[
-        :MAX_TECH_COINS
+        :SCAN_LIMIT
     ]
 
     print(
-        f"{len(candidates)} "
-        "coin analiz edilecek."
+        f"{len(candidates)} coin analiz edilecek."
     )
 
-    results = []
+    market = market_snapshot()
 
-    # -----------------------------------------------------
-    # TECHNICAL SCAN
-    # -----------------------------------------------------
+    results = []
 
     for symbol, _ in candidates:
 
@@ -2184,202 +1747,49 @@ def main():
             symbol
         )
 
-        result = technical_analysis(
-            symbol
+        result = analyze(
+            symbol,
+            market
         )
 
         if result:
+
             results.append(
                 result
             )
 
-    # -----------------------------------------------------
-    # SECTOR
-    # -----------------------------------------------------
+    statistics = (
+        sector_statistics(
+            results
+        )
+    )
 
-    sectors = sector_rotation(
+    results = relative_strength(
         results,
-        social_data
+        statistics
     )
 
-    # -----------------------------------------------------
-    # EARLY
-    # -----------------------------------------------------
-
-    early = build_early_radar(
-        results,
-        social_data,
-        sectors,
-        market
-    )
-
-    # -----------------------------------------------------
-    # FOLLOWER
-    # -----------------------------------------------------
-
-    followers = follower_radar(
-        results
-    )
-
-    # -----------------------------------------------------
-    # LONG / SHORT
-    # -----------------------------------------------------
-
-    longs = []
-
-    shorts = []
-
-    for r in results:
-
-        long_score = 0
-        short_score = 0
-
-        # LONG
-        if (
-            r["rsi15"] >= 50
-            and r["rsi15"] <= 68
-        ):
-            long_score += 10
-
-        if r["rsi_change"] > 2:
-            long_score += 10
-
-        if (
-            r["ema9"]
-            > r["ema21"]
-        ):
-            long_score += 10
-
-        if (
-            r["price"]
-            > r["ema50"]
-        ):
-            long_score += 8
-
-        if r["macd_acc"] > 0:
-            long_score += 10
-
-        if r["obv_rising"]:
-            long_score += 8
-
-        if r["volume"] >= 1.5:
-            long_score += 8
-
-        if r["taker_ratio"] >= 0.53:
-            long_score += 8
-
-        if (
-            r["adx"] >= 20
-            and r["plus_di"]
-            > r["minus_di"]
-        ):
-            long_score += 10
-
-        if r["price"] > r["vwap"]:
-            long_score += 8
-
-        if r["supertrend"]:
-            long_score += 8
-
-        if r["fresh_long"]:
-            long_score += 12
-
-        # SHORT
-        if (
-            r["rsi15"] >= 32
-            and r["rsi15"] <= 50
-        ):
-            short_score += 10
-
-        if r["rsi_change"] < -2:
-            short_score += 10
-
-        if (
-            r["ema9"]
-            < r["ema21"]
-        ):
-            short_score += 10
-
-        if (
-            r["price"]
-            < r["ema50"]
-        ):
-            short_score += 8
-
-        if r["macd_acc"] < 0:
-            short_score += 10
-
-        if not r["obv_rising"]:
-            short_score += 8
-
-        if r["volume"] >= 1.5:
-            short_score += 8
-
-        if r["taker_ratio"] <= 0.47:
-            short_score += 8
-
-        if (
-            r["adx"] >= 20
-            and r["minus_di"]
-            > r["plus_di"]
-        ):
-            short_score += 10
-
-        if r["price"] < r["vwap"]:
-            short_score += 8
-
-        if not r["supertrend"]:
-            short_score += 8
-
-        if r["fresh_short"]:
-            short_score += 12
-
-        if (
-            long_score >= 85
-            and r["fresh_long"]
-            and r["momentum"] > 0
-            and r["rsi15"] < 72
-        ):
-
-            longs.append(
-                (
-                    long_score,
-                    r
-                )
-            )
-
-        if (
-            short_score >= 85
-            and r["fresh_short"]
-            and r["momentum"] < 0
-            and r["rsi15"] > 28
-        ):
-
-            shorts.append(
-                (
-                    short_score,
-                    r
-                )
-            )
-
-    longs.sort(
-        key=lambda x:
-        x[0],
+    results.sort(
+        key=lambda x: x["score"],
         reverse=True
     )
 
-    shorts.sort(
-        key=lambda x:
-        x[0],
-        reverse=True
+    return (
+        market,
+        results,
+        statistics
     )
 
-    longs = longs[:3]
-    shorts = shorts[:3]
 
-    # -----------------------------------------------------
-    # MESSAGE
-    # -----------------------------------------------------
+# =========================================================
+# MESAJ
+# =========================================================
+
+def build_message(
+    market,
+    results,
+    statistics
+):
 
     now = datetime.now(
         timezone.utc
@@ -2387,416 +1797,320 @@ def main():
         "%d.%m.%Y %H:%M UTC"
     )
 
+    mscore = market_score(
+        market
+    )
+
     message = (
-        "🧠 BINANCE EARLY "
-        "INTELLIGENCE SCANNER\n\n"
+
+        "🧠 BİNANCE ERKEN HAREKET TARAMASI\n\n"
 
         f"🕐 {now}\n"
 
-        "📊 15m + 1h + 4h\n"
+        "📊 15dk + 1s + 4s\n"
 
         "🧠 RSI • EMA • MACD • BB\n"
 
-        "📈 OBV • ADX • DI • VWAP\n"
+        "📈 OBV • ADX/DI • VWAP\n"
 
-        "🔥 Volume + Taker Buy\n"
+        "🔥 Hacim • Alıcı Baskısı\n"
 
-        "⚡ Momentum Acceleration\n"
+        "⚡ Momentum İvmesi\n"
 
-        "🟣 Sector Rotation\n"
+        "🟣 Sektör Rotasyonu\n"
 
-        "🔗 Leader → Follower\n"
+        "🎯 Göreceli Güç\n"
 
-        "📱 Social Radar\n"
-
-        "🚀 Early Breakout Engine\n"
+        "🚀 Erken Hareket Motoru\n"
 
         "━━━━━━━━━━━━━━━━━━\n\n"
+
+        "🌍 PİYASA DURUMU\n\n"
+
+        f"₿ BTC momentum: "
+        f"{market['BTCUSDT']['momentum']:+.2f}%\n"
+
+        f"₿ BTC RSI: "
+        f"{market['BTCUSDT']['rsi']:.1f}\n"
+
+        f"Ξ ETH momentum: "
+        f"{market['ETHUSDT']['momentum']:+.2f}%\n"
+
+        f"Ξ ETH RSI: "
+        f"{market['ETHUSDT']['rsi']:.1f}\n\n"
+
+        f"📊 Piyasa skoru: "
+        f"{mscore}/5\n\n"
     )
 
-    # -----------------------------------------------------
-    # MARKET
-    # -----------------------------------------------------
+    # =====================================================
+    # ERKEN HAREKET
+    # =====================================================
+
+    candidates = [
+        x
+        for x in results
+        if x["score"] >= 65
+    ]
+
+    candidates = candidates[:5]
 
     message += (
-        "🌍 MARKET REGIME\n\n"
+        "🟣 ERKEN HAREKET / İZLE\n\n"
     )
 
-    if market:
+    if not candidates:
 
         message += (
-            f"BTC Momentum: "
-            f"{market['btc']['momentum']:+.2f}%\n"
-
-            f"BTC RSI: "
-            f"{market['btc']['rsi15']:.1f}\n"
-
-            f"ETH Momentum: "
-            f"{market['eth']['momentum']:+.2f}%\n"
-
-            f"Market Score: "
-            f"{market['score']}/5\n\n"
+            "🟡 Şu anda yeterince güçlü "
+            "erken hareket adayı yok.\n\n"
         )
 
     else:
 
-        message += (
-            "Market verisi alınamadı.\n\n"
-        )
-
-    # -----------------------------------------------------
-    # EARLY RADAR
-    # -----------------------------------------------------
-
-    message += (
-        "🟣 EARLY BREAKOUT RADAR\n\n"
-    )
-
-    if not early:
-
-        message += (
-            "🟡 Şu anda erken hareket "
-            "adayı yok.\n\n"
-        )
-
-    else:
-
-        for i, item in enumerate(
-            early,
+        for i, coin in enumerate(
+            candidates,
             1
         ):
 
-            r = item["technical"]
+            if coin.get(
+                "laggard"
+            ):
+
+                status = (
+                    "🔵 GERİDE KALAN ADAY"
+                )
+
+            elif coin["score"] >= 80:
+
+                status = (
+                    "🟢 GÜÇLÜ ERKEN SİNYAL"
+                )
+
+            else:
+
+                status = (
+                    "🟡 İZLE"
+                )
 
             message += (
-                f"🏆 {i}. "
-                f"{item['symbol']}\n"
 
-                f"🟣 EARLY SCORE: "
-                f"{item['score']}/100\n"
+                f"🏆 {i}. "
+                f"{coin['symbol']}\n"
+
+                f"{status}\n"
+
+                f"⭐ Skor: "
+                f"{coin['score']}/100\n"
 
                 f"🏷️ Sektör: "
-                f"{item['sector']}\n"
+                f"{coin['sector']}\n"
 
                 f"💰 Fiyat: "
-                f"{price_format(r['price'])}\n"
+                f"{price_format(coin['price'])}\n"
 
                 f"📈 Momentum: "
-                f"{r['momentum']:+.2f}%\n"
+                f"{coin['momentum']:+.2f}%\n"
+
+                f"⚡ Momentum ivmesi: "
+                f"{coin['momentum_acc']:+.2f}%\n"
 
                 f"🔥 Hacim: "
-                f"x{r['volume']:.1f}\n"
+                f"x{coin['volume']:.1f}\n"
 
                 f"⚡ Hacim ivmesi: "
-                f"x{r['volume_acceleration']:.1f}\n"
+                f"x{coin['volume_acc']:.1f}\n"
 
                 f"📊 RSI: "
-                f"{r['rsi15']:.1f} "
-                f"(Δ {r['rsi_change']:+.1f})\n"
+                f"{coin['rsi']:.1f} "
+                f"(Δ {coin['rsi_delta']:+.1f})\n"
 
                 f"📐 ADX: "
-                f"{r['adx']:.1f}\n"
+                f"{coin['adx']:.1f}\n"
 
-                f"🛒 Taker Buy: "
-                f"{r['taker_ratio']*100:.1f}%\n"
+                f"🛒 Alıcı baskısı: "
+                f"%{coin['taker']:.1f}\n"
 
-                f"📊 BB Width: "
-                f"{r['bb_width']:.2f}%\n"
-
-                f"🧠 "
-                + ", ".join(
-                    item["reasons"]
-                )
-                + "\n"
+                f"📏 BB genişliği: "
+                f"%{coin['bb_width']:.2f}\n"
             )
 
-            social = item["social"]
-
-            if social:
+            if coin.get(
+                "laggard"
+            ):
 
                 message += (
-                    f"📱 Social sentiment: "
-                    f"{float(social.get('sentiment', 0)):.0f}\n"
+                    "🔵 SEKTÖR YÜKSELİYOR, "
+                    "BU COIN GERİDE\n"
+                )
 
-                    f"🌐 Social volume: "
-                    f"{social.get('social_volume_24h', 0)}\n"
+            if coin["reasons"]:
+
+                message += (
+                    "🧠 "
+                    + ", ".join(
+                        coin["reasons"][:8]
+                    )
+                    + "\n"
                 )
 
             message += (
-                "\n━━━━━━━━━━━━━━━━━━\n\n"
+                "\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
             )
 
-    # -----------------------------------------------------
-    # FOLLOWER
-    # -----------------------------------------------------
+    # =====================================================
+    # SEKTÖR ROTASYONU
+    # =====================================================
 
     message += (
-        "🔗 LEADER → FOLLOWER RADAR\n\n"
+        "🔄 SEKTÖR ROTASYONU\n\n"
     )
 
-    if not followers:
-
-        message += (
-            "🟡 Güçlü gecikmeli korelasyon "
-            "bulunamadı.\n\n"
-        )
-
-    else:
-
-        for item in followers:
-
-            message += (
-                f"🚀 Leader: "
-                f"{item['leader']}\n"
-
-                f"🎯 Follower: "
-                f"{item['follower']}\n"
-
-                f"📊 Korelasyon: "
-                f"{item['correlation']:.2f}\n"
-
-                f"⏱️ Tarihsel gecikme: "
-                f"{item['lag']} dk\n"
-
-                f"🔥 Leader momentum: "
-                f"{item['leader_momentum']:+.2f}%\n"
-
-                f"📈 Follower momentum: "
-                f"{item['follower_momentum']:+.2f}%\n\n"
-            )
-
-    # -----------------------------------------------------
-    # SECTOR ROTATION
-    # -----------------------------------------------------
-
-    message += (
-        "🔄 SECTOR ROTATION\n\n"
-    )
-
-    ranked_sectors = sorted(
-        sectors.items(),
+    active_sectors = sorted(
+        statistics.items(),
         key=lambda x:
         x[1]["momentum"],
         reverse=True
-    )
+    )[:5]
 
-    if not ranked_sectors:
+    if not active_sectors:
 
         message += (
-            "🟡 Yeterli sektör verisi yok.\n\n"
+            "🟡 Yeterli sektör verisi yok.\n"
         )
 
     else:
 
-        for sector, stats in (
-            ranked_sectors[:5]
-        ):
+        for (
+            sector_name,
+            data
+        ) in active_sectors:
+
+            if data[
+                "momentum"
+            ] > 0.5:
+
+                icon = "🔥"
+
+            elif data[
+                "momentum"
+            ] > 0:
+
+                icon = "🟢"
+
+            else:
+
+                icon = "🔴"
 
             message += (
-                f"🔥 {sector}: "
-                f"{stats['momentum']:+.2f}% "
+                f"{icon} "
+                f"{sector_name}: "
+                f"{data['momentum']:+.2f}% "
                 f"| Hacim x"
-                f"{stats['volume']:.1f}\n"
+                f"{data['volume']:.1f}\n"
             )
 
-        message += "\n"
-
-    # -----------------------------------------------------
-    # LONG
-    # -----------------------------------------------------
+    # =====================================================
+    # SOSYAL
+    # =====================================================
 
     message += (
-        "📈 GÜÇLÜ LONG\n\n"
+        "\n"
+        "📱 SOSYAL RADAR\n\n"
+
+        "⚪ Pasif.\n"
+
+        "X/Twitter verisi için "
+        "ayrı API erişimi gerekir. "
+        "Anahtar olmadan sosyal sinyal "
+        "uydurmuyorum.\n\n"
     )
 
-    if not longs:
-
-        message += (
-            "🟡 Fresh breakout şartlarını "
-            "karşılayan LONG yok.\n\n"
-        )
-
-    else:
-
-        for score, r in longs:
-
-            risk = (
-                r["atr"] * 1.5
-            )
-
-            sl = (
-                r["price"]
-                - risk
-            )
-
-            tp1 = (
-                r["price"]
-                + risk
-            )
-
-            tp2 = (
-                r["price"]
-                + risk * 1.5
-            )
-
-            tp3 = (
-                r["price"]
-                + risk * 2
-            )
-
-            message += (
-                f"🟢 {r['symbol']}\n"
-
-                f"⭐ Sinyal: "
-                f"{score}/100\n"
-
-                f"💰 Giriş: "
-                f"{price_format(r['price'])}\n"
-
-                f"📊 RSI: "
-                f"{r['rsi15']:.1f}\n"
-
-                f"🔥 Hacim: "
-                f"x{r['volume']:.1f}\n"
-
-                f"⚡ Momentum: "
-                f"{r['momentum']:+.2f}%\n"
-
-                f"📐 ADX: "
-                f"{r['adx']:.1f}\n"
-
-                f"🛒 Taker Buy: "
-                f"{r['taker_ratio']*100:.1f}%\n"
-
-                f"🛑 SL: "
-                f"{price_format(sl)}\n"
-
-                f"🎯 TP1: "
-                f"{price_format(tp1)}\n"
-
-                f"🎯 TP2: "
-                f"{price_format(tp2)}\n"
-
-                f"🎯 TP3: "
-                f"{price_format(tp3)}\n\n"
-
-                "━━━━━━━━━━━━━━━━━━\n\n"
-            )
-
-    # -----------------------------------------------------
-    # SHORT
-    # -----------------------------------------------------
+    # =====================================================
+    # FİLTRELER
+    # =====================================================
 
     message += (
-        "📉 GÜÇLÜ SHORT\n\n"
-    )
 
-    if not shorts:
+        "🛡️ KULLANILAN FİLTRELER\n\n"
 
-        message += (
-            "🟡 Fresh breakdown şartlarını "
-            "karşılayan SHORT yok.\n\n"
-        )
+        "• Aşırı yükselmiş coin ceza alır\n"
 
-    else:
+        "• RSI aşırı yüksekse ceza alır\n"
 
-        for score, r in shorts:
+        "• Zayıf ADX güçlü trend sayılmaz\n"
 
-            risk = (
-                r["atr"] * 1.5
-            )
+        "• Hacim artışı aranır\n"
 
-            sl = (
-                r["price"]
-                + risk
-            )
+        "• Alıcı baskısı aranır\n"
 
-            tp1 = (
-                r["price"]
-                - risk
-            )
+        "• Momentumun hızlanması aranır\n"
 
-            tp2 = (
-                r["price"]
-                - risk * 1.5
-            )
+        "• OBV teyidi aranır\n"
 
-            tp3 = (
-                r["price"]
-                - risk * 2
-            )
+        "• Yükselen sektörde geride kalanlar ayrıca aranır\n"
 
-            message += (
-                f"🔴 {r['symbol']}\n"
+        "• Henüz kırılmamış hareketler önceliklendirilir\n\n"
 
-                f"⭐ Sinyal: "
-                f"{score}/100\n"
-
-                f"💰 Giriş: "
-                f"{price_format(r['price'])}\n"
-
-                f"📊 RSI: "
-                f"{r['rsi15']:.1f}\n"
-
-                f"🔥 Hacim: "
-                f"x{r['volume']:.1f}\n"
-
-                f"📉 Momentum: "
-                f"{r['momentum']:+.2f}%\n"
-
-                f"📐 ADX: "
-                f"{r['adx']:.1f}\n"
-
-                f"🛒 Taker Buy: "
-                f"{r['taker_ratio']*100:.1f}%\n"
-
-                f"🛑 SL: "
-                f"{price_format(sl)}\n"
-
-                f"🎯 TP1: "
-                f"{price_format(tp1)}\n"
-
-                f"🎯 TP2: "
-                f"{price_format(tp2)}\n"
-
-                f"🎯 TP3: "
-                f"{price_format(tp3)}\n\n"
-
-                "━━━━━━━━━━━━━━━━━━\n\n"
-            )
-
-    # -----------------------------------------------------
-    # FOOTER
-    # -----------------------------------------------------
-
-    message += (
-        "🧠 Mantık:\n"
-        "Market → Sektör → Relative Strength → "
-        "Leader/Follower → Sosyal → Teknik → Breakout\n\n"
-
-        "📱 Social Radar: "
-        + (
-            "AKTİF"
-            if LUNAR_KEY
-            else "PASİF "
-            "(LUNARCRUSH_API_KEY yok)"
-        )
-        + "\n\n"
-
-        "⚠️ Teknik/sosyal sinyal sistemidir. "
+        "⚠️ Teknik tarama sistemidir. "
         "Yatırım tavsiyesi değildir."
     )
 
-    print(message)
+    return message
 
-    send_telegram(
-        message
+
+# =========================================================
+# MAIN
+# =========================================================
+
+def main():
+
+    print(
+        "🚀 BİNANCE ERKEN HAREKET BOTU BAŞLADI"
     )
 
+    try:
 
-# =========================================================
-# RUN
-# =========================================================
+        (
+            market,
+            results,
+            statistics
+        ) = scan()
+
+        message = build_message(
+            market,
+            results,
+            statistics
+        )
+
+        print(
+            message
+        )
+
+        sent = telegram_send(
+            message
+        )
+
+        if not sent:
+
+            print(
+                "Telegram mesajı gönderilemedi."
+            )
+
+    except Exception as e:
+
+        print(
+            "ANA HATA:",
+            repr(e)
+        )
+
+        telegram_send(
+            "🚨 BOT HATASI\n\n"
+            + str(e)
+        )
+
 
 if __name__ == "__main__":
+
     main()
