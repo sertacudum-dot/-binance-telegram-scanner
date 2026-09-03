@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 # =========================================================
 
 BINANCE = "https://data-api.binance.vision"
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+# .get() kullanıyoruz ki bu dosya (Bot.py) başka bir script tarafından
+# (örn. backtest.py) TELEGRAM_BOT_TOKEN olmadan da import edilebilsin.
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID_ENV = os.environ.get("TELEGRAM_CHAT_ID")  # önerilen: sabit chat id
 
 STABLECOINS = {
@@ -89,6 +91,10 @@ def get_chat_id():
 
 
 def send_telegram(message):
+    if not TOKEN:
+        print("TELEGRAM_BOT_TOKEN ayarlanmamış, mesaj gönderilemiyor.")
+        return
+
     chat_id = get_chat_id()
 
     if not chat_id:
@@ -701,12 +707,37 @@ def stablecoin_pair(symbol):
 # =========================================================
 
 def analyze(symbol):
+    """
+    Canlı analiz: Binance'tan veri çeker, analyze_core'a devreder.
+    """
     try:
         close15, high15, low15, vol15 = get_klines(symbol, "15m")
         close1h, high1h, low1h, vol1h = get_klines(symbol, "1h")
         close4h, high4h, low4h, vol4h = get_klines(symbol, "4h")
 
         if len(close15) < 60 or len(close1h) < 60 or len(close4h) < 60:
+            return None
+
+        return analyze_core(
+            symbol, close15, high15, low15, vol15, close1h, close4h
+        )
+
+    except Exception as e:
+        print(f"{symbol} analiz hatası: {e}")
+        return None
+
+
+def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
+    """
+    Saf hesaplama fonksiyonu — ağ çağrısı yapmaz.
+    Canlı tarama (analyze) ve backtest (backtest.py) bu fonksiyonu
+    ortak kullanır; sinyal mantığı tek bir yerden yönetilir.
+
+    close1h / close4h: sadece kapanış fiyatı serisi yeterli
+    (rsi/macd/ema hesapları sadece close kullanıyor).
+    """
+    try:
+        if len(close15) < 60 or len(close1h) < 35 or len(close4h) < 55:
             return None
 
         # Kapanmış son mumun kapanışı = karar fiyatı (whipsaw'ı azaltır)
