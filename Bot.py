@@ -1299,6 +1299,7 @@ def bt_backtest_symbol(symbol, days):
                 result["long_tp2"], result["long_tp3"]
             )
             score = result["long_score"]
+            reasons = result["long_reasons"]
         elif result["short_signal"]:
             direction = "SHORT"
             sl, tp1, tp2, tp3 = (
@@ -1306,6 +1307,7 @@ def bt_backtest_symbol(symbol, days):
                 result["short_tp2"], result["short_tp3"]
             )
             score = result["short_score"]
+            reasons = result["short_reasons"]
         else:
             continue
 
@@ -1324,7 +1326,8 @@ def bt_backtest_symbol(symbol, days):
             "score": score,
             "entry": result["price"],
             "outcome": outcome,
-            "r": r_multiple
+            "r": r_multiple,
+            "reasons": "|".join(reasons)
         })
 
         last_signal_index = i
@@ -1399,6 +1402,68 @@ def bt_print_summary(all_trades):
     print("\nNot: Ortalama R pozitifse sistem risk/ödül açısından kâr "
           "üretmiş demektir (komisyon/slipaj hariç). Negatifse eşikleri "
           "veya skorlama ağırlıklarını gözden geçirmek gerekir.")
+
+    bt_reason_breakdown(all_trades)
+
+
+def bt_reason_breakdown(all_trades):
+    """
+    Her bir 'teyit' (indikatör) tek başına kazanma oranını ne yönde
+    etkiliyor, onu ölçer. Bir teyit hangi sinyallerde vardıysa o
+    grubun performansını, olmadığı sinyallerin performansıyla
+    karşılaştırır. Böylece hangi indikatörün gerçekten işe yaradığı,
+    hangisinin gürültü (hatta zararlı) olduğu görülür.
+    """
+    print("\n" + "-" * 50)
+    print("🔍 TEYİT (İNDİKATÖR) BAZINDA ETKİ ANALİZİ")
+    print("-" * 50)
+    print("(pozitif fark = bu teyit varken performans daha iyi, "
+          "negatif fark = bu teyit varken performans daha kötü)\n")
+
+    for direction in ("LONG", "SHORT"):
+        subset = [t for t in all_trades if t["direction"] == direction]
+        if len(subset) < 10:
+            continue
+
+        all_reasons = set()
+        for t in subset:
+            all_reasons.update(t["reasons"].split("|"))
+        all_reasons.discard("")
+
+        overall_avg_r = sum(t["r"] for t in subset) / len(subset)
+
+        rows = []
+        for reason in sorted(all_reasons):
+            with_reason = [t for t in subset if reason in t["reasons"].split("|")]
+            without_reason = [t for t in subset if reason not in t["reasons"].split("|")]
+
+            if len(with_reason) < 5:
+                continue
+
+            with_avg_r = sum(t["r"] for t in with_reason) / len(with_reason)
+            with_win_rate = len([t for t in with_reason if t["r"] > 0]) / len(with_reason) * 100
+
+            diff = with_avg_r - overall_avg_r
+
+            rows.append((reason, len(with_reason), with_win_rate, with_avg_r, diff))
+
+        rows.sort(key=lambda x: x[4], reverse=True)
+
+        print(f"\n{direction} (genel ortalama R: {overall_avg_r:+.2f}, "
+              f"{len(subset)} sinyal):")
+
+        if not rows:
+            print("  Yeterli veri yok (her teyit için en az 5 sinyal gerekiyor)")
+            continue
+
+        for reason, count, win_rate, avg_r, diff in rows:
+            print(f"  {reason:<28} n={count:<4} kazanma={win_rate:5.1f}%  "
+                  f"R={avg_r:+.2f}  (fark: {diff:+.2f})")
+
+    print("\nNot: 'n' sayısı 15-20'nin altındaysa o teyit için sonuç "
+          "istatistiksel olarak güvenilir değildir, yorumlarken dikkatli "
+          "ol. Fark belirgin şekilde negatifse (örn. -0.2 ve altı), o "
+          "teyidi skordan çıkarmayı düşünebiliriz.")
 
 
 def bt_save_csv(all_trades, path="backtest_results.csv"):
