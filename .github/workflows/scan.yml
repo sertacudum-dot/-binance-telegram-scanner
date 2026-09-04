@@ -4,11 +4,28 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mod: scan (normal tarama) veya backtest"
+        required: false
+        default: "scan"
+        type: choice
+        options:
+          - scan
+          - backtest
+      symbols:
+        description: "Backtest için coinler (virgülle ayır)"
+        required: false
+        default: "BTCUSDT,ETHUSDT,SOLUSDT"
+      days:
+        description: "Backtest için kaç günlük veri"
+        required: false
+        default: "60"
 
 jobs:
-  scan:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -19,15 +36,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check files
-        run: |
-          pwd
-          ls -la
-          echo "Workflows:"
-          ls -la .github/workflows || true
-
-      - name: Run Binance Scanner
+      - name: Run Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python Bot.py
+        run: |
+          if [ "${{ github.event.inputs.mode }}" = "backtest" ]; then
+            python Bot.py --backtest --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}"
+          else
+            python Bot.py
+          fi
+
+      - name: Upload backtest results (varsa)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-results
+          path: backtest_results.csv
+          if-no-files-found: ignore
