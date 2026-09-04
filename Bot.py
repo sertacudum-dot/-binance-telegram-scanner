@@ -1368,6 +1368,34 @@ def bt_print_summary(all_trades):
               f"kazanma oranı {len(sub_wins) / len(subset) * 100:.1f}%, "
               f"ortalama R {sub_avg_r:+.2f}")
 
+    # ---------------------------------------------------------
+    # SKORA GÖRE KIRILIM — eşik yükseltmenin işe yarayıp
+    # yaramayacağını görmek için: skor arttıkça performans da
+    # artıyor mu?
+    # ---------------------------------------------------------
+    print("\n" + "-" * 50)
+    print("📊 SKOR ARALIĞINA GÖRE PERFORMANS")
+    print("-" * 50)
+
+    buckets = [(70, 79), (80, 89), (90, 100)]
+
+    for direction in ("LONG", "SHORT"):
+        print(f"\n{direction}:")
+        subset = [t for t in all_trades if t["direction"] == direction]
+
+        for lo, hi in buckets:
+            bucket = [t for t in subset if lo <= t["score"] <= hi]
+            if not bucket:
+                print(f"  Skor {lo}-{hi}: sinyal yok")
+                continue
+
+            b_wins = [t for t in bucket if t["r"] > 0]
+            b_win_rate = len(b_wins) / len(bucket) * 100
+            b_avg_r = sum(t["r"] for t in bucket) / len(bucket)
+
+            print(f"  Skor {lo}-{hi}: {len(bucket)} sinyal, "
+                  f"kazanma {b_win_rate:.1f}%, ortalama R {b_avg_r:+.2f}")
+
     print("\nNot: Ortalama R pozitifse sistem risk/ödül açısından kâr "
           "üretmiş demektir (komisyon/slipaj hariç). Negatifse eşikleri "
           "veya skorlama ağırlıklarını gözden geçirmek gerekir.")
