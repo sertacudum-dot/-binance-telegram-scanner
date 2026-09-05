@@ -6,13 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Mod: scan (normal tarama) veya backtest"
+        description: "Mod: scan / backtest / precursor"
         required: false
         default: "scan"
         type: choice
         options:
           - scan
           - backtest
+          - precursor
       symbols:
         description: "Backtest için coinler (virgülle ayır)"
         required: false
@@ -21,11 +22,22 @@ on:
         description: "Backtest için kaç günlük veri"
         required: false
         default: "60"
+      fee_pct:
+        description: "Gidiş-dönüş işlem maliyeti (örn. 0.001 = %0.1). Boş bırakılırsa varsayılan kullanılır."
+        required: false
+        default: ""
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    concurrency:
+      group: binance-scanner
+      cancel-in-progress: false
+    # ^ Tüm coin taraması eskisinden uzun sürebileceği için, aynı anda
+    # iki taramanın üst üste binmesini engelliyoruz: yeni tetiklenen
+    # çalışma, öncekinin bitmesini bekler (üst üste binip Telegram'a
+    # çift mesaj atmak yerine kuyruğa girer).
 
     steps:
       - name: Checkout
@@ -42,7 +54,13 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "backtest" ]; then
-            python Bot.py --backtest --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}"
+            FEE_ARG=""
+            if [ -n "${{ github.event.inputs.fee_pct }}" ]; then
+              FEE_ARG="--fee-pct ${{ github.event.inputs.fee_pct }}"
+            fi
+            python Bot.py --backtest --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}" $FEE_ARG
+          elif [ "${{ github.event.inputs.mode }}" = "precursor" ]; then
+            python Bot.py --precursor --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}"
           else
             python Bot.py
           fi
