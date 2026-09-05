@@ -1330,7 +1330,7 @@ BT_LOOKAHEAD_CANDLES = 96      # sinyal sonrası en fazla kaç 15m mum bekleyeli
 BT_COOLDOWN_CANDLES = 8         # aynı coin için bir sinyalden sonra kaç mum boyunca yeni sinyal aranmasın
 BT_TRAIL_WINDOW = 1100           # her adımda sadece son N adet 15m mumu kullan (performans için)
 BT_MIN_WARMUP_15M = 960           # backtest'e başlamadan önce gereken minimum 15m mum sayısı (~10 gün)
-BT_ROUNDTRIP_COST_PCT = 0.002      # tahmini komisyon+slipaj (giriş+çıkış toplam, %0.2 varsayılan)
+BT_ROUNDTRIP_COST_PCT = 0.001      # Binance Futures taker (~%0.05 x2 yön) + kaba funding payı varsayımı
 
 
 def bt_fetch_full_klines(symbol, interval, days):
@@ -1665,9 +1665,14 @@ def bt_save_csv(all_trades, path="backtest_results.csv"):
     print(f"\n💾 Detaylı sonuçlar kaydedildi: {path}")
 
 
-def backtest_main(symbols_arg, days):
+def backtest_main(symbols_arg, days, fee_pct=None):
+    global BT_ROUNDTRIP_COST_PCT
+    if fee_pct is not None:
+        BT_ROUNDTRIP_COST_PCT = fee_pct
+
     symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
-    print(f"🚀 Backtest başlıyor: {symbols} | {days} gün")
+    print(f"🚀 Backtest başlıyor: {symbols} | {days} gün | "
+          f"işlem maliyeti: %{BT_ROUNDTRIP_COST_PCT*100:.3f} (gidiş-dönüş)")
 
     print("\n📥 BTC piyasa rejimi verisi çekiliyor (filtre için)...")
     try:
@@ -1702,10 +1707,13 @@ def main():
                          help="Backtest için virgülle ayrılmış coin listesi")
     parser.add_argument("--days", type=int, default=60,
                          help="Backtest için kaç günlük geçmiş veri test edilsin")
+    parser.add_argument("--fee-pct", type=float, default=None,
+                         help="Gidiş-dönüş toplam işlem maliyeti (örn. 0.001 = %%0.1). "
+                              "Verilmezse varsayılan (futures taker) kullanılır.")
     args = parser.parse_args()
 
     if args.backtest:
-        backtest_main(args.symbols, args.days)
+        backtest_main(args.symbols, args.days, args.fee_pct)
     else:
         scan_main()
 
