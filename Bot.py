@@ -1170,6 +1170,7 @@ BT_LOOKAHEAD_CANDLES = 96      # sinyal sonrası en fazla kaç 15m mum bekleyeli
 BT_COOLDOWN_CANDLES = 8         # aynı coin için bir sinyalden sonra kaç mum boyunca yeni sinyal aranmasın
 BT_TRAIL_WINDOW = 1100           # her adımda sadece son N adet 15m mumu kullan (performans için)
 BT_MIN_WARMUP_15M = 960           # backtest'e başlamadan önce gereken minimum 15m mum sayısı (~10 gün)
+BT_ROUNDTRIP_COST_PCT = 0.002      # tahmini komisyon+slipaj (giriş+çıkış toplam, %0.2 varsayılan)
 
 
 def bt_fetch_full_klines(symbol, interval, days):
@@ -1322,6 +1323,15 @@ def bt_backtest_symbol(symbol, days):
             future_high, future_low
         )
 
+        # Komisyon/slipaj etkisini R cinsinden hesapla: her işlemde
+        # giriş+çıkış için toplam BT_ROUNDTRIP_COST_PCT kadar maliyet
+        # oluşur (sonuç kazanç ya da kayıp olsun fark etmez, her
+        # işlemde ödenir). Bunu risk miktarına (SL mesafesi) oranlayıp
+        # R cinsine çeviriyoruz.
+        risk_price = abs(result["price"] - sl)
+        fee_r = (result["price"] * BT_ROUNDTRIP_COST_PCT) / risk_price if risk_price > 0 else 0
+        net_r = r_multiple - fee_r
+
         trades.append({
             "symbol": symbol,
             "direction": direction,
@@ -1330,6 +1340,7 @@ def bt_backtest_symbol(symbol, days):
             "entry": result["price"],
             "outcome": outcome,
             "r": r_multiple,
+            "net_r": net_r,
             "reasons": "|".join(reasons)
         })
 
@@ -1353,6 +1364,8 @@ def bt_print_summary(all_trades):
 
     win_rate = len(wins) / total * 100
     avg_r = sum(t["r"] for t in all_trades) / total
+    avg_net_r = sum(t.get("net_r", t["r"]) for t in all_trades) / total
+    net_wins = [t for t in all_trades if t.get("net_r", t["r"]) > 0]
 
     print("\n" + "=" * 50)
     print("📈 GENEL SONUÇ")
@@ -1362,7 +1375,11 @@ def bt_print_summary(all_trades):
     print(f"Kaybeden (SL)        : {len(losses)}")
     print(f"Zaman aşımı (TP/SL'ye ulaşmadı): {len(timeouts)}")
     print(f"Kazanma oranı        : {win_rate:.1f}%")
-    print(f"Ortalama R (risk katı): {avg_r:+.2f}")
+    print(f"Ortalama R (komisyonsuz, brüt): {avg_r:+.2f}")
+    print(f"Ortalama R (komisyon dahil, NET): {avg_net_r:+.2f}  "
+          f"(%{BT_ROUNDTRIP_COST_PCT*100:.2f} işlem maliyeti varsayımıyla)")
+    print(f"Net kazanma oranı (komisyon sonrası): "
+          f"{len(net_wins) / total * 100:.1f}%")
 
     for direction in ("LONG", "SHORT"):
         subset = [t for t in all_trades if t["direction"] == direction]
@@ -1370,9 +1387,10 @@ def bt_print_summary(all_trades):
             continue
         sub_wins = [t for t in subset if t["r"] > 0]
         sub_avg_r = sum(t["r"] for t in subset) / len(subset)
+        sub_avg_net_r = sum(t.get("net_r", t["r"]) for t in subset) / len(subset)
         print(f"\n{direction}: {len(subset)} sinyal, "
               f"kazanma oranı {len(sub_wins) / len(subset) * 100:.1f}%, "
-              f"ortalama R {sub_avg_r:+.2f}")
+              f"brüt R {sub_avg_r:+.2f}, NET R {sub_avg_net_r:+.2f}")
 
     # ---------------------------------------------------------
     # SKORA GÖRE KIRILIM — eşik yükseltmenin işe yarayıp
