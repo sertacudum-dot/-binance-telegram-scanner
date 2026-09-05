@@ -38,7 +38,7 @@ SHORT_SIGNAL_THRESHOLD = 70
 # 15 coin / 610 sinyallik backtest'te SHORT sinyalleri net negatif çıktı
 # (NET R: -0.18), LONG ise net pozitifti (+0.01). Bunu tamamen kapatmak
 # istersen aşağıyı False yap — sadece LONG sinyalleri üretilir.
-ENABLE_SHORT_SIGNALS = True
+ENABLE_SHORT_SIGNALS = False
 
 TOP_LONG = 3
 TOP_SHORT = 3
