@@ -1,0 +1,47 @@
+name: Binance Erken Uyarı (Hacim Patlaması)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    concurrency:
+      group: binance-alert
+      cancel-in-progress: false
+    # ^ Ana tarama/backtest'ten AYRI bir concurrency grubu — bu sayede
+    # uzun süren bir backtest çalışırken erken uyarı katmanı bloklanmaz.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Restore alert state (cooldown hafızası)
+        uses: actions/cache/restore@v4
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
+          restore-keys: |
+            alert-state-
+
+      - name: Run Alert Scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python Bot.py --alert
+
+      - name: Save alert state (cooldown hafızası)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: alert_state.json
+          key: alert-state-${{ github.run_id }}
