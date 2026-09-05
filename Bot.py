@@ -597,7 +597,8 @@ def fresh_breakout(close, high, low, volume):
 # =========================================================
 
 def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower,
-                   rsi15=None, adx_value=None, volume_ratio=None):
+                   rsi15=None, adx_value=None, volume_ratio=None,
+                   rsi1h=None, rsi4h=None):
     """
     Backtest'te bulduğumuz somut kanıta göre sıkılaştırıldı: en büyük
     dump'ların hemen öncesinde RSI15 ~75+, ADX ~48+, hacim oranı ~2.3x
@@ -605,6 +606,12 @@ def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower,
     bizim eski LONG kriterlerimizden bile daha güçlü görünüyordu.
     Bu yüzden ATR mesafesi eşiği düşürüldü (3 -> 2.5) ve RSI+ADX+hacim
     birlikte aşırı yüksekken de aşırı uzamış sayılıyor.
+
+    EK DÜZELTME (canlı örnekten): Bir coin kısa vadede (15m RSI)
+    "resetlenmiş" görünse bile uzun vadede (4h RSI) hâlâ aşırı ısınmış
+    olabiliyor (örn. NOMUSDT: rsi15=53 normal görünüyordu ama rsi4h=78
+    aşırı alımdaydı, coin zaten %19 pompalanmıştı). Bu yüzden rsi4h/rsi1h
+    tek başına çok yüksek/düşükse de aşırı uzamış sayılıyor.
     """
     price = close[-1]
 
@@ -623,8 +630,28 @@ def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower,
         and rsi15 <= 28 and adx_value >= 40 and volume_ratio >= 2.0
     )
 
-    long_over = long_distance >= 2.5 or price > bollinger_upper or blow_off_top
-    short_over = short_distance >= 2.5 or price < bollinger_lower or blow_off_bottom
+    # Uzun vadeli (4h/1h) aşırı alım/satım — 15m resetlenmiş olsa bile
+    higher_tf_overbought = (
+        (rsi4h is not None and rsi4h >= 75)
+        or (rsi1h is not None and rsi1h >= 80)
+    )
+    higher_tf_oversold = (
+        (rsi4h is not None and rsi4h <= 25)
+        or (rsi1h is not None and rsi1h <= 20)
+    )
+
+    long_over = (
+        long_distance >= 2.5
+        or price > bollinger_upper
+        or blow_off_top
+        or higher_tf_overbought
+    )
+    short_over = (
+        short_distance >= 2.5
+        or price < bollinger_lower
+        or blow_off_bottom
+        or higher_tf_oversold
+    )
 
     return {
         "long": long_over,
@@ -1029,7 +1056,8 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
 
         extension = overextension(
             close15, atr_value, ema21, upper, lower,
-            rsi15=rsi15, adx_value=adx_value, volume_ratio=volume_ratio
+            rsi15=rsi15, adx_value=adx_value, volume_ratio=volume_ratio,
+            rsi1h=rsi1h, rsi4h=rsi4h
         )
         if extension["long"]:
             long_score -= 20
