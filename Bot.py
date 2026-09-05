@@ -938,8 +938,9 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             long_score += 6; long_reasons.append("Supertrend")         # veri azdı, değiştirilmedi
         if cmf_value > 0.05:
             long_score += 1; long_reasons.append("CMF")                # -0.16 ölçüldü (n=51) -> ciddi azaltıldı
-        if squeeze_released and price > ema9:
-            long_score += 8; long_reasons.append("Squeeze Release")    # YENİ, henüz test edilmedi
+        # Squeeze Release, precursor analizinde 2h VE 8h ufuklarında
+        # tutarlı şekilde OLUMSUZ çıktı (fark: -0.13 / -0.14) ->
+        # puanlamadan tamamen çıkarıldı.
 
         if volume_ratio >= 3: long_score += 10
         elif volume_ratio >= 2: long_score += 7
@@ -984,8 +985,9 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             short_score += 6; short_reasons.append("Supertrend")       # veri azdı, değiştirilmedi
         if cmf_value < -0.05:
             short_score += 8; short_reasons.append("CMF")              # +0.08 ölçüldü (n=23) -> artırıldı
-        if squeeze_released and price < ema9:
-            short_score += 8; short_reasons.append("Squeeze Release")  # YENİ, henüz test edilmedi
+        # Squeeze Release, precursor analizinde 2h VE 8h ufuklarında
+        # tutarlı şekilde OLUMSUZ çıktı (fark: -0.13 / -0.14) ->
+        # puanlamadan tamamen çıkarıldı.
 
         if volume_ratio >= 3: short_score += 10
         elif volume_ratio >= 2: short_score += 7
@@ -1377,8 +1379,9 @@ def bt_fetch_full_klines(symbol, interval, days):
     high = [float(x[2]) for x in all_rows]
     low = [float(x[3]) for x in all_rows]
     volume = [float(x[5]) for x in all_rows]
+    open_times = [int(x[0]) for x in all_rows]  # mum açılış zamanı (ms epoch)
 
-    return close, high, low, volume
+    return close, high, low, volume, open_times
 
 
 def bt_simulate_outcome(direction, entry_price, sl, tp1, tp2, tp3,
@@ -1415,7 +1418,7 @@ def bt_simulate_outcome(direction, entry_price, sl, tp1, tp2, tp3,
 def bt_backtest_symbol(symbol, days, btc_close4h_full=None):
     print(f"\n📥 {symbol}: geçmiş veri çekiliyor ({days} gün)...")
 
-    close15, high15, low15, vol15 = bt_fetch_full_klines(symbol, "15m", days)
+    close15, high15, low15, vol15, _open_times = bt_fetch_full_klines(symbol, "15m", days)
 
     if len(close15) < BT_MIN_WARMUP_15M + BT_LOOKAHEAD_CANDLES:
         print(f"⚠️ {symbol}: yeterli veri yok, atlanıyor ({len(close15)} mum).")
@@ -1677,7 +1680,7 @@ def backtest_main(symbols_arg, days, fee_pct=None):
 
     print("\n📥 BTC piyasa rejimi verisi çekiliyor (filtre için)...")
     try:
-        btc_close15, _, _, _ = bt_fetch_full_klines("BTCUSDT", "15m", days)
+        btc_close15, _, _, _, _ = bt_fetch_full_klines("BTCUSDT", "15m", days)
         btc_close4h_full = btc_close15[15::16]
         print(f"✅ BTC: {len(btc_close4h_full)} adet 4h mum türetildi.")
     except Exception as e:
@@ -1732,7 +1735,7 @@ def pearson_corr(xs, ys):
 
 def collect_precursor_samples(symbol, days, lookahead_candles):
     print(f"\n📥 {symbol}: geçmiş veri çekiliyor ({days} gün)...")
-    close15, high15, low15, vol15 = bt_fetch_full_klines(symbol, "15m", days)
+    close15, high15, low15, vol15, open_times = bt_fetch_full_klines(symbol, "15m", days)
 
     if len(close15) < BT_MIN_WARMUP_15M + lookahead_candles:
         print(f"⚠️ {symbol}: yeterli veri yok, atlanıyor.")
@@ -1783,6 +1786,8 @@ def collect_precursor_samples(symbol, days, lookahead_candles):
 
         samples.append({
             "symbol": symbol,
+            "timestamp_ms": open_times[i],
+            "price": price,
             "forward_return": forward_return,
             "rsi15": result["rsi15"],
             "rsi1h": result["rsi1h"],
@@ -1826,6 +1831,61 @@ def quantile_buckets(samples, feature, num_buckets=5):
         buckets.append((min(vals), max(vals), len(bucket_samples), sum(rets) / len(rets)))
 
     return buckets
+
+
+def print_top_events(samples, top_n=15):
+    """
+    İleri getirisi en yüksek (pump) ve en düşük (dump) olan somut
+    örnekleri, o anki gösterge değerleriyle birlikte tek tek listeler.
+    Bu, ortalamalara bakmak yerine gerçek olayları görmeyi sağlar.
+    """
+    sorted_by_return = sorted(samples, key=lambda s: s["forward_return"])
+
+    dumps = sorted_by_return[:top_n]
+    pumps = list(reversed(sorted_by_return[-top_n:]))
+
+    feature_keys = [
+        "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
+        "volume_acceleration", "momentum", "momentum_acceleration",
+        "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct",
+        "squeeze_released", "trend4h_up"
+    ]
+
+    def format_event(s):
+        dt = datetime.fromtimestamp(s["timestamp_ms"] / 1000, tz=timezone.utc)
+        date_str = dt.strftime("%d.%m.%Y %H:%M UTC")
+        line1 = f"  {s['symbol']:<10} {date_str}  fiyat={s['price']:.4f}  ileri getiri: {s['forward_return']:+.2f}%"
+        line2 = "    " + ", ".join(f"{k}={s[k]:.2f}" for k in feature_keys)
+        return line1 + "\n" + line2
+
+    print("\n" + "-" * 50)
+    print(f"🚀 EN BÜYÜK {top_n} PUMP (ileri getiriye göre)")
+    print("-" * 50)
+    for s in pumps:
+        print(format_event(s))
+
+    print("\n" + "-" * 50)
+    print(f"💥 EN BÜYÜK {top_n} DUMP (ileri getiriye göre)")
+    print("-" * 50)
+    for s in dumps:
+        print(format_event(s))
+
+    # Pump'ların ve dump'ların ORTALAMA profili — tek tek örneklerin
+    # ötesinde, "tipik bir pump başlangıcı" neye benziyor sorusuna cevap
+    print("\n" + "-" * 50)
+    print(f"📐 PUMP vs DUMP ORTALAMA PROFİLİ (ilk {top_n}'er örnek)")
+    print("-" * 50)
+    print(f"{'Gösterge':<22} {'PUMP ort.':>12} {'DUMP ort.':>12}")
+    for k in feature_keys:
+        pump_avg = sum(s[k] for s in pumps) / len(pumps)
+        dump_avg = sum(s[k] for s in dumps) / len(dumps)
+        print(f"{k:<22} {pump_avg:>12.2f} {dump_avg:>12.2f}")
+
+    print("\nNot: Bu liste, gerçek en büyük hareketlerin başladığı anlarda "
+          "göstergelerin ne durumda olduğunu gösterir. Pump ve dump "
+          "satırları arasında tutarlı bir fark varsa (örn. pump'larda "
+          "hep düşük ADX + squeeze_released=1, dump'larda hep yüksek "
+          "ADX), bu güçlü bir örüntüdür.")
 
 
 def precursor_print_report(samples, lookahead_candles):
@@ -1892,6 +1952,8 @@ def precursor_print_report(samples, lookahead_candles):
           "genelde yükselmiş', negatif korelasyon = 'düşmüş'. Örnek "
           "sayısı (n) her dilimde en az birkaç yüz değilse dikkatli "
           "yorumla.")
+
+    print_top_events(samples, top_n=15)
 
 
 def precursor_main(symbols_arg, days, lookahead_candles):
