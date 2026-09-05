@@ -566,6 +566,52 @@ def bollinger_width(close):
 
 
 # =========================================================
+# BAYRAK (FLAG) FORMASYONU TESPİTİ
+# =========================================================
+# Klasik "bull flag": güçlü bir yükseliş hareketi (direk/pole), ardından
+# dar bir bantta kısa süreli yatay/hafif geri çekilen konsolidasyon
+# (bayrak). Kullanıcının paylaştığı gerçek pump örneklerinde bu örüntü
+# tekrarlanıyordu (günlerce yatay bant + ani patlama).
+#
+# Not: Bu geometrik bir yaklaşıklamadır, gerçek görsel bir grafik
+# tanıma değildir — mum verilerinden "güçlü önceki hareket + sıkı
+# sonraki konsolidasyon" oranını hesaplar.
+
+FLAG_POLE_CANDLES = 8   # direk (pole) için bakılan mum sayısı
+FLAG_CONSOLIDATION_CANDLES = 6  # bayrak (konsolidasyon) için bakılan mum sayısı
+
+
+def detect_bull_flag(close):
+    """
+    Yüksek skor = güçlü bir önceki yükseliş (direk) + ardından sıkı,
+    dar bantlı bir konsolidasyon (bayrak). Bearish (düşüş) flag için
+    aynı mantık negatif pole_move ile ayrıca değerlendirilebilir.
+    """
+    needed = FLAG_POLE_CANDLES + FLAG_CONSOLIDATION_CANDLES
+    if len(close) < needed:
+        return 0.0
+
+    flag_segment = close[-FLAG_CONSOLIDATION_CANDLES:]
+    pole_segment = close[-needed:-FLAG_CONSOLIDATION_CANDLES]
+
+    if not pole_segment or pole_segment[0] == 0:
+        return 0.0
+
+    pole_move_pct = (pole_segment[-1] - pole_segment[0]) / pole_segment[0] * 100
+
+    flag_avg = sum(flag_segment) / len(flag_segment)
+    if flag_avg == 0:
+        return 0.0
+
+    flag_range_pct = (max(flag_segment) - min(flag_segment)) / flag_avg * 100
+
+    if pole_move_pct <= 0:
+        return 0.0
+
+    return pole_move_pct / (flag_range_pct + 1)
+
+
+# =========================================================
 # FRESH BREAKOUT
 # =========================================================
 
@@ -1852,6 +1898,21 @@ def collect_precursor_samples(symbol, days, lookahead_candles):
         price_calmness = max(0, 1 - min(abs(momentum_val), 5) / 5)
         cmf_accum = result["cmf"] * price_calmness
 
+        # ---- UZUN SÜRELİ SIKIŞMA göstergeleri ----
+        # Kullanıcının paylaştığı gerçek pump örneklerinde ortak nokta:
+        # patlamadan önce SAATLERCE/GÜNLERCE dar bir bantta yatay hareket.
+        # 15m Squeeze Release (tek mumluk anlık ölçüm) bunu yakalayamıyordu.
+        bb_width_1h = bollinger_width(w_close1h) if len(w_close1h) >= 20 else 0
+
+        range_tightness_24h = 0
+        if len(w_close1h) >= 24:
+            recent_24 = w_close1h[-24:]
+            avg_24 = sum(recent_24) / len(recent_24)
+            if avg_24 > 0:
+                range_tightness_24h = (max(recent_24) - min(recent_24)) / avg_24 * 100
+
+        bull_flag_score = detect_bull_flag(w_close1h)
+
         samples.append({
             "symbol": symbol,
             "timestamp_ms": open_times[i],
@@ -1875,6 +1936,9 @@ def collect_precursor_samples(symbol, days, lookahead_candles):
             "trend4h_up": trend4h_up,
             "quiet_accum": quiet_accum,
             "cmf_accum": cmf_accum,
+            "bb_width_1h": bb_width_1h,
+            "range_tightness_24h": range_tightness_24h,
+            "bull_flag_score": bull_flag_score,
         })
 
     print(f"📊 {symbol}: {len(samples)} örnek toplandı.")
@@ -1918,7 +1982,8 @@ def print_top_events(samples, top_n=15):
         "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
         "volume_acceleration", "momentum", "momentum_acceleration",
         "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct",
-        "squeeze_released", "trend4h_up", "quiet_accum", "cmf_accum"
+        "squeeze_released", "trend4h_up", "quiet_accum", "cmf_accum",
+        "bb_width_1h", "range_tightness_24h", "bull_flag_score"
     ]
 
     def format_event(s):
@@ -1975,7 +2040,8 @@ def precursor_print_report(samples, lookahead_candles):
         "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
         "volume_acceleration", "momentum", "momentum_acceleration",
         "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct",
-        "quiet_accum", "cmf_accum"
+        "quiet_accum", "cmf_accum", "bb_width_1h", "range_tightness_24h",
+        "bull_flag_score"
     ]
     boolean_features = ["squeeze_released", "trend4h_up"]
 
