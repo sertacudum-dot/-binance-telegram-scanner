@@ -15,9 +15,9 @@ on:
           - backtest
           - precursor
       symbols:
-        description: "Backtest için coinler (virgülle ayır)"
+        description: "Coinler (virgülle ayır)"
         required: false
-        default: "BTCUSDT,ETHUSDT,SOLUSDT"
+        default: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,SUIUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT"
       days:
         description: "Backtest için kaç günlük veri"
         required: false
