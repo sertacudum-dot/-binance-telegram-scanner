@@ -1784,6 +1784,16 @@ def collect_precursor_samples(symbol, days, lookahead_candles):
         if len(w_close4h) >= 55 and ema(w_close4h, 21) > ema(w_close4h, 50):
             trend4h_up = 1
 
+        # ---- "SESSİZ BİRİKİM" göstergeleri ----
+        # Fikir: büyük oyuncular fiyatı itmeden önce sessizce alım yapar.
+        # Bu, hacimde/para akışında görülür ama fiyatta henüz görülmez.
+        # Klasik lagging göstergelerin aksine, bunlar "fiyat henüz
+        # hareket etmemişken" oluşan sinyalleri yakalamayı hedefliyor.
+        momentum_val = result["momentum"]
+        quiet_accum = result["volume"] / (abs(momentum_val) + 1)
+        price_calmness = max(0, 1 - min(abs(momentum_val), 5) / 5)
+        cmf_accum = result["cmf"] * price_calmness
+
         samples.append({
             "symbol": symbol,
             "timestamp_ms": open_times[i],
@@ -1805,6 +1815,8 @@ def collect_precursor_samples(symbol, days, lookahead_candles):
             "dist_ema21_pct": dist_ema21_pct,
             "squeeze_released": 1 if result["squeeze_released"] else 0,
             "trend4h_up": trend4h_up,
+            "quiet_accum": quiet_accum,
+            "cmf_accum": cmf_accum,
         })
 
     print(f"📊 {symbol}: {len(samples)} örnek toplandı.")
@@ -1848,7 +1860,7 @@ def print_top_events(samples, top_n=15):
         "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
         "volume_acceleration", "momentum", "momentum_acceleration",
         "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct",
-        "squeeze_released", "trend4h_up"
+        "squeeze_released", "trend4h_up", "quiet_accum", "cmf_accum"
     ]
 
     def format_event(s):
@@ -1904,7 +1916,8 @@ def precursor_print_report(samples, lookahead_candles):
     numeric_features = [
         "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
         "volume_acceleration", "momentum", "momentum_acceleration",
-        "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct"
+        "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct",
+        "quiet_accum", "cmf_accum"
     ]
     boolean_features = ["squeeze_released", "trend4h_up"]
 
