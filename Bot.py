@@ -937,7 +937,7 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         if st_bullish is True:
             long_score += 6; long_reasons.append("Supertrend")         # veri azdı, değiştirilmedi
         if cmf_value > 0.05:
-            long_score += 5; long_reasons.append("CMF")                # YENİ, henüz test edilmedi
+            long_score += 1; long_reasons.append("CMF")                # -0.16 ölçüldü (n=51) -> ciddi azaltıldı
         if squeeze_released and price > ema9:
             long_score += 8; long_reasons.append("Squeeze Release")    # YENİ, henüz test edilmedi
 
@@ -983,7 +983,7 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         if st_bullish is False:
             short_score += 6; short_reasons.append("Supertrend")       # veri azdı, değiştirilmedi
         if cmf_value < -0.05:
-            short_score += 5; short_reasons.append("CMF")              # YENİ, henüz test edilmedi
+            short_score += 8; short_reasons.append("CMF")              # +0.08 ölçüldü (n=23) -> artırıldı
         if squeeze_released and price < ema9:
             short_score += 8; short_reasons.append("Squeeze Release")  # YENİ, henüz test edilmedi
 
@@ -1078,6 +1078,7 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             "momentum_acceleration": momentum_acceleration,
             "adx": adx_value, "plus_di": plus_di, "minus_di": minus_di,
             "vwap": current_vwap, "radar": radar, "extension": extension,
+            "cmf": cmf_value, "squeeze_released": squeeze_released,
             "long_sl": long_sl, "long_tp1": long_tp1,
             "long_tp2": long_tp2, "long_tp3": long_tp3,
             "short_sl": short_sl, "short_tp1": short_tp1,
@@ -1696,6 +1697,220 @@ def backtest_main(symbols_arg, days, fee_pct=None):
 
 
 # =========================================================
+# PRECURSOR ANALİZİ — "büyük hareketlerden önce hangi göstergeler
+# ne durumdaydı?" sorusunu, mevcut skorlama sistemimizden bağımsız
+# olarak, doğrudan ham veriden cevaplar.
+#
+# Backtest, sadece bizim skorlama eşiğimizi geçen ~100-200 sinyale
+# bakıyordu. Bu analiz TÜM geçmiş mumlara bakıyor (binlerce nokta)
+# ve her göstergenin o andaki değeri ile X saat sonraki fiyat
+# değişimi arasındaki korelasyonu ölçüyor. Böylece "bizim skorlama
+# formülümüz işe yarıyor mu" değil, "gerçekte hangi seviyeler
+# artıştan/düşüşten önce geliyor" sorusuna cevap arıyoruz.
+# =========================================================
+
+PRECURSOR_STEP = 4  # her N mumda bir örnek al (performans için, 4=saatte bir)
+
+
+def pearson_corr(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return 0.0
+
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+
+    if var_x == 0 or var_y == 0:
+        return 0.0
+
+    return cov / math.sqrt(var_x * var_y)
+
+
+def collect_precursor_samples(symbol, days, lookahead_candles):
+    print(f"\n📥 {symbol}: geçmiş veri çekiliyor ({days} gün)...")
+    close15, high15, low15, vol15 = bt_fetch_full_klines(symbol, "15m", days)
+
+    if len(close15) < BT_MIN_WARMUP_15M + lookahead_candles:
+        print(f"⚠️ {symbol}: yeterli veri yok, atlanıyor.")
+        return []
+
+    print(f"✅ {symbol}: {len(close15)} adet 15m mum indirildi.")
+
+    full_close1h = close15[3::4]
+    full_close4h = close15[15::16]
+
+    samples = []
+    total_steps = len(close15) - lookahead_candles
+
+    for i in range(BT_MIN_WARMUP_15M, total_steps, PRECURSOR_STEP):
+        window_start = max(0, i - BT_TRAIL_WINDOW + 1)
+
+        w_close15 = close15[window_start:i + 1]
+        w_high15 = high15[window_start:i + 1]
+        w_low15 = low15[window_start:i + 1]
+        w_vol15 = vol15[window_start:i + 1]
+
+        n1h = (i + 1) // 4
+        n4h = (i + 1) // 16
+
+        w_close1h = full_close1h[:n1h]
+        w_close4h = full_close4h[:n4h]
+
+        result = analyze_core(
+            symbol, w_close15, w_high15, w_low15, w_vol15,
+            w_close1h, w_close4h
+        )
+
+        if not result:
+            continue
+
+        price = result["price"]
+        forward_price = close15[i + lookahead_candles]
+        forward_return = (forward_price - price) / price * 100
+
+        bb_width = bollinger_width(w_close15)
+        e21 = ema(w_close15, 21)
+        dist_ema21_pct = (price - e21) / e21 * 100 if e21 else 0
+        dist_vwap_pct = (price - result["vwap"]) / result["vwap"] * 100 if result["vwap"] else 0
+
+        trend4h_up = 0
+        if len(w_close4h) >= 55 and ema(w_close4h, 21) > ema(w_close4h, 50):
+            trend4h_up = 1
+
+        samples.append({
+            "symbol": symbol,
+            "forward_return": forward_return,
+            "rsi15": result["rsi15"],
+            "rsi1h": result["rsi1h"],
+            "rsi4h": result["rsi4h"],
+            "adx": result["adx"],
+            "di_diff": result["plus_di"] - result["minus_di"],
+            "volume_ratio": result["volume"],
+            "volume_acceleration": result["volume_acceleration"],
+            "momentum": result["momentum"],
+            "momentum_acceleration": result["momentum_acceleration"],
+            "stoch": result["stoch"],
+            "cmf": result["cmf"],
+            "bb_width": bb_width,
+            "dist_vwap_pct": dist_vwap_pct,
+            "dist_ema21_pct": dist_ema21_pct,
+            "squeeze_released": 1 if result["squeeze_released"] else 0,
+            "trend4h_up": trend4h_up,
+        })
+
+    print(f"📊 {symbol}: {len(samples)} örnek toplandı.")
+    return samples
+
+
+def quantile_buckets(samples, feature, num_buckets=5):
+    sorted_s = sorted(samples, key=lambda s: s[feature])
+    n = len(sorted_s)
+    bucket_size = max(1, n // num_buckets)
+
+    buckets = []
+    for b in range(num_buckets):
+        start = b * bucket_size
+        end = (b + 1) * bucket_size if b < num_buckets - 1 else n
+        bucket_samples = sorted_s[start:end]
+
+        if not bucket_samples:
+            continue
+
+        vals = [s[feature] for s in bucket_samples]
+        rets = [s["forward_return"] for s in bucket_samples]
+
+        buckets.append((min(vals), max(vals), len(bucket_samples), sum(rets) / len(rets)))
+
+    return buckets
+
+
+def precursor_print_report(samples, lookahead_candles):
+    if not samples:
+        print("\n⚠️ Hiç örnek toplanamadı.")
+        return
+
+    baseline = sum(s["forward_return"] for s in samples) / len(samples)
+    hours = lookahead_candles * 15 / 60
+
+    print("\n" + "=" * 50)
+    print(f"🔬 PRECURSOR ANALİZİ ({hours:.0f} saatlik ileri getiri, {len(samples)} örnek)")
+    print("=" * 50)
+    print(f"Genel ortalama ileri getiri (baseline): {baseline:+.2f}%")
+
+    numeric_features = [
+        "rsi15", "rsi1h", "rsi4h", "adx", "di_diff", "volume_ratio",
+        "volume_acceleration", "momentum", "momentum_acceleration",
+        "stoch", "cmf", "bb_width", "dist_vwap_pct", "dist_ema21_pct"
+    ]
+    boolean_features = ["squeeze_released", "trend4h_up"]
+
+    print("\n📈 KORELASYON SIRALAMASI (|korelasyon| büyükten küçüğe)")
+    print("(pozitif = gösterge yükseldikçe ileri getiri de yükseliyor, "
+          "negatif = tam tersi)\n")
+
+    corr_rows = []
+    for feat in numeric_features:
+        xs = [s[feat] for s in samples]
+        ys = [s["forward_return"] for s in samples]
+        corr = pearson_corr(xs, ys)
+        corr_rows.append((feat, corr))
+
+    corr_rows.sort(key=lambda x: abs(x[1]), reverse=True)
+
+    for feat, corr in corr_rows:
+        print(f"  {feat:<22} korelasyon: {corr:+.3f}")
+
+    print("\n📊 EN GÜÇLÜ 6 GÖSTERGE İÇİN DETAY (5'li dilimler halinde)")
+    for feat, corr in corr_rows[:6]:
+        print(f"\n{feat} (korelasyon {corr:+.3f}):")
+        for lo, hi, count, avg_ret in quantile_buckets(samples, feat):
+            print(f"  [{lo:8.2f} - {hi:8.2f}]  n={count:<5} "
+                  f"ort. ileri getiri: {avg_ret:+.2f}%")
+
+    print("\n🔘 İKİLİ (evet/hayır) GÖSTERGELER")
+    for feat in boolean_features:
+        true_group = [s["forward_return"] for s in samples if s[feat] == 1]
+        false_group = [s["forward_return"] for s in samples if s[feat] == 0]
+
+        if not true_group or not false_group:
+            continue
+
+        avg_true = sum(true_group) / len(true_group)
+        avg_false = sum(false_group) / len(false_group)
+
+        print(f"\n{feat}:")
+        print(f"  VARKEN  (n={len(true_group):<5}): ort. ileri getiri {avg_true:+.2f}%")
+        print(f"  YOKKEN  (n={len(false_group):<5}): ort. ileri getiri {avg_false:+.2f}%")
+        print(f"  fark: {avg_true - avg_false:+.2f} puan")
+
+    print("\nNot: Bu analiz LONG/SHORT ayrımı yapmaz, ham ileri getiriye "
+          "bakar. Pozitif korelasyon = 'bu gösterge yüksekken fiyat "
+          "genelde yükselmiş', negatif korelasyon = 'düşmüş'. Örnek "
+          "sayısı (n) her dilimde en az birkaç yüz değilse dikkatli "
+          "yorumla.")
+
+
+def precursor_main(symbols_arg, days, lookahead_candles):
+    symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+    print(f"🔬 Precursor analizi başlıyor: {symbols} | {days} gün | "
+          f"{lookahead_candles} mum ileri bakış")
+
+    all_samples = []
+    for symbol in symbols:
+        try:
+            samples = collect_precursor_samples(symbol, days, lookahead_candles)
+            all_samples.extend(samples)
+        except Exception as e:
+            print(f"❌ {symbol} precursor hatası: {e}")
+
+    precursor_print_report(all_samples, lookahead_candles)
+
+
+# =========================================================
 # ENTRY POINT
 # =========================================================
 
@@ -1703,16 +1918,22 @@ def main():
     parser = argparse.ArgumentParser(description="Binance Long+Short Scanner & Backtest")
     parser.add_argument("--backtest", action="store_true",
                          help="Normal tarama yerine backtest modunda çalıştır")
+    parser.add_argument("--precursor", action="store_true",
+                         help="Precursor analizi modunda çalıştır (ham veriden gösterge-getiri ilişkisi)")
     parser.add_argument("--symbols", type=str, default="BTCUSDT,ETHUSDT,SOLUSDT",
-                         help="Backtest için virgülle ayrılmış coin listesi")
+                         help="Virgülle ayrılmış coin listesi")
     parser.add_argument("--days", type=int, default=60,
-                         help="Backtest için kaç günlük geçmiş veri test edilsin")
+                         help="Kaç günlük geçmiş veri test edilsin")
     parser.add_argument("--fee-pct", type=float, default=None,
                          help="Gidiş-dönüş toplam işlem maliyeti (örn. 0.001 = %%0.1). "
                               "Verilmezse varsayılan (futures taker) kullanılır.")
+    parser.add_argument("--lookahead-candles", type=int, default=32,
+                         help="Precursor analizinde kaç 15m mum ileriye bakılsın (32 = 8 saat)")
     args = parser.parse_args()
 
-    if args.backtest:
+    if args.precursor:
+        precursor_main(args.symbols, args.days, args.lookahead_candles)
+    elif args.backtest:
         backtest_main(args.symbols, args.days, args.fee_pct)
     else:
         scan_main()
