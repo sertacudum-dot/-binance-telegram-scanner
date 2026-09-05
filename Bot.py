@@ -45,6 +45,19 @@ TOP_SHORT = 3
 TOP_PUMP = 5
 TOP_DUMP = 5
 
+# ---- ERKEN UYARI (hızlı, hafif, sadece 15m) ----
+# Ana taramadan (3 zaman dilimi, ağır) bağımsız, ayrı ve hızlı bir katman.
+# Amaç: "coin daha yeni hareketlenirken" haber vermek — ana tarama 15
+# dakikada bir çalışırken, bu katman çok daha sık (workflow'un izin
+# verdiği en kısa aralıkla, pratikte 5 dakika) çalışabilir.
+ALERT_VOLUME_RATIO_THRESHOLD = 2.5     # ana taramadan daha sıkı (1.5 değil)
+ALERT_VOLUME_ACCEL_THRESHOLD = 2.0
+ALERT_MOMENTUM_MIN = 0.3               # zaten cok hareket etmemis olmali
+ALERT_MOMENTUM_MAX = 4.0
+ALERT_RSI_MAX = 75                      # asiri alim bolgesine girmemis olmali
+ALERT_COOLDOWN_SECONDS = 3600           # ayni coin icin 1 saat icinde tekrar uyarma
+ALERT_STATE_FILE = "alert_state.json"
+
 
 # =========================================================
 # GLOBAL RATE LIMITER (paralel taramada Binance'ı yormamak için)
@@ -986,6 +999,7 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         st_bullish = supertrend_bullish(high15, low15, close15)
         cmf_value = cmf(high15, low15, close15, vol15)
         squeeze_released = squeeze_just_released(close15, high15, low15)
+        bull_flag_score = detect_bull_flag(close1h)
 
         avg_volume = sum(vol15[-21:-1]) / 20
         if avg_volume <= 0:
@@ -1043,6 +1057,16 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         if 0.5 <= momentum <= 2.5:
             long_score += 2; long_reasons.append("Momentum")             # -0.02, düşük tutuldu
         # Momentum Acceleration LONG'da -0.50 etki ölçüldü -> puanlamadan çıkarıldı.
+
+        # Precursor analizinde (17.880 örnek, 15 coin) test edilen TÜM
+        # göstergeler arasında en yüksek ve en temiz (monoton) korelasyona
+        # sahip çıktı (+0.124) -> anlamlı bir ağırlıkla skora eklendi.
+        # Eşik 0.45'ten 0.20'ye düşürüldü: önceki turda diğer LONG
+        # koşullarıyla neredeyse hiç örtüşmediği için ölçülemez kaldı
+        # (n<5). Precursor'daki 4. ve 5. dilim sınırı (~0.12-0.45)
+        # ikisi de pozitifti, bu yüzden alt sınır genişletildi.
+        if bull_flag_score >= 0.20:
+            long_score += 8; long_reasons.append("Bull Flag")
 
         # -------------------- SHORT --------------------
         # SHORT tarafı genel olarak net negatif (-0.18 NET R) — ağırlıkları
@@ -1368,6 +1392,140 @@ def build_message(results):
     )
 
     return message
+
+
+# =========================================================
+# ERKEN UYARI (hızlı, hafif, sadece 15m veri) — ana taramadan bağımsız
+# =========================================================
+
+def load_alert_state():
+    if not os.path.exists(ALERT_STATE_FILE):
+        return {}
+    try:
+        with open(ALERT_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_alert_state(state):
+    try:
+        with open(ALERT_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print("⚠️ Alert state kaydedilemedi:", e)
+
+
+def quick_alert_check(symbol):
+    """
+    Sadece 15m veriyle hızlı kontrol. Ana analyze()'dan farklı olarak
+    1h/4h çekmiyor (hız için) — bu yüzden ana sistemden çok daha hızlı
+    çalışabilir (her coin için tek istek).
+    """
+    try:
+        close15, high15, low15, vol15 = get_klines(symbol, "15m", limit=60)
+    except Exception:
+        return None
+
+    if len(close15) < 30:
+        return None
+
+    price = close15[-1]
+    avg_volume = sum(vol15[-21:-1]) / 20
+    if avg_volume <= 0:
+        return None
+
+    volume_ratio = vol15[-1] / avg_volume
+    previous_avg = sum(vol15[-11:-1]) / 10
+    volume_acceleration = vol15[-1] / previous_avg if previous_avg > 0 else 1
+
+    momentum_info = momentum_data(close15)
+    momentum = momentum_info["momentum"]
+    rsi15 = rsi(close15)
+
+    obv_values = obv(close15, vol15)
+    obv_positive = len(obv_values) >= 6 and obv_values[-1] > obv_values[-5]
+
+    # En iyi bulduğumuz iki gösterge (backtest'te en güvenilir çıkanlar):
+    # Volume Acceleration ve OBV. Buna ek olarak "henüz erken" filtresi
+    # (momentum dar aralıkta, RSI aşırı alıma girmemiş).
+    if (
+        volume_ratio >= ALERT_VOLUME_RATIO_THRESHOLD
+        and volume_acceleration >= ALERT_VOLUME_ACCEL_THRESHOLD
+        and ALERT_MOMENTUM_MIN <= momentum <= ALERT_MOMENTUM_MAX
+        and rsi15 <= ALERT_RSI_MAX
+        and obv_positive
+    ):
+        return {
+            "symbol": symbol,
+            "price": price,
+            "volume_ratio": volume_ratio,
+            "volume_acceleration": volume_acceleration,
+            "momentum": momentum,
+            "rsi15": rsi15,
+        }
+
+    return None
+
+
+def alert_main():
+    print("⚡ ERKEN UYARI TARAMASI (hızlı, sadece 15m)")
+
+    state = load_alert_state()
+    now_ts = time.time()
+
+    candidates = get_candidates()
+    print(f"{len(candidates)} coin hızlı kontrol edilecek.")
+
+    hits = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_symbol = {
+            executor.submit(quick_alert_check, symbol): symbol
+            for symbol, _ in candidates
+        }
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                result = future.result()
+            except Exception as e:
+                continue
+            if result:
+                last_alert = state.get(symbol, 0)
+                if now_ts - last_alert >= ALERT_COOLDOWN_SECONDS:
+                    hits.append(result)
+                    state[symbol] = now_ts
+
+    # Eski (cooldown süresi çoktan geçmiş) kayıtları temizle, dosya büyümesin
+    state = {sym: ts for sym, ts in state.items() if now_ts - ts < ALERT_COOLDOWN_SECONDS * 6}
+    save_alert_state(state)
+
+    if not hits:
+        print("Yeni uyarı yok.")
+        return
+
+    hits.sort(key=lambda h: h["volume_ratio"], reverse=True)
+
+    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    message = f"⚡ ERKEN UYARI — Hacim Patlaması\n🕐 {now_str}\n"
+    message += "━━━━━━━━━━━━━━━━━━\n\n"
+
+    for h in hits:
+        message += (
+            f"🔥 {h['symbol']}\n"
+            f"💰 Fiyat: {price_format(h['price'])}\n"
+            f"📊 Hacim: x{h['volume_ratio']:.1f} (ivme x{h['volume_acceleration']:.1f})\n"
+            f"🚀 Momentum: {h['momentum']:+.1f}%\n"
+            f"📐 RSI15: {h['rsi15']:.1f}\n\n"
+        )
+
+    message += (
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ Bu erken bir uyarıdır, ana sinyal sistemi gibi kapsamlı "
+        "onaylanmamıştır. Yatırım tavsiyesi değildir."
+    )
+
+    print(message)
+    send_telegram(message)
 
 
 def scan_main():
@@ -2127,6 +2285,8 @@ def main():
                          help="Normal tarama yerine backtest modunda çalıştır")
     parser.add_argument("--precursor", action="store_true",
                          help="Precursor analizi modunda çalıştır (ham veriden gösterge-getiri ilişkisi)")
+    parser.add_argument("--alert", action="store_true",
+                         help="Hızlı erken uyarı modunda çalıştır (sadece 15m, hacim patlaması)")
     parser.add_argument("--symbols", type=str, default="BTCUSDT,ETHUSDT,SOLUSDT",
                          help="Virgülle ayrılmış coin listesi")
     parser.add_argument("--days", type=int, default=60,
@@ -2138,7 +2298,9 @@ def main():
                          help="Precursor analizinde kaç 15m mum ileriye bakılsın (32 = 8 saat)")
     args = parser.parse_args()
 
-    if args.precursor:
+    if args.alert:
+        alert_main()
+    elif args.precursor:
         precursor_main(args.symbols, args.days, args.lookahead_candles)
     elif args.backtest:
         backtest_main(args.symbols, args.days, args.fee_pct)
