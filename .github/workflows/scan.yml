@@ -22,8 +22,12 @@ on:
         description: "Backtest için kaç günlük veri"
         required: false
         default: "60"
+      lookahead_candles:
+        description: "Precursor: kaç 15m mum ileriye bakılsın (8=2 saat, 32=8 saat, varsayılan 32)"
+        required: false
+        default: "32"
       fee_pct:
-        description: "Gidiş-dönüş işlem maliyeti (örn. 0.001 = %0.1). Boş bırakılırsa varsayılan kullanılır."
+        description: "Backtest: gidiş-dönüş işlem maliyeti (örn. 0.001 = %0.1). Boş bırakılırsa varsayılan kullanılır."
         required: false
         default: ""
 
@@ -60,7 +64,7 @@ jobs:
             fi
             python Bot.py --backtest --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}" $FEE_ARG
           elif [ "${{ github.event.inputs.mode }}" = "precursor" ]; then
-            python Bot.py --precursor --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}"
+            python Bot.py --precursor --symbols "${{ github.event.inputs.symbols }}" --days "${{ github.event.inputs.days }}" --lookahead-candles "${{ github.event.inputs.lookahead_candles }}"
           else
             python Bot.py
           fi
