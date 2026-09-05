@@ -4,6 +4,8 @@ import time
 import math
 import csv
 import argparse
+import threading
+import concurrent.futures
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -25,9 +27,10 @@ STABLECOINS = {
 }
 
 MIN_QUOTE_VOLUME = 5_000_000     # 24h min hacim (USDT)
-TOP_N_CANDIDATES = 100           # hacme göre ilk N coin
-REQUEST_SLEEP = 0.12             # istekler arası bekleme (rate-limit koruması)
+TOP_N_CANDIDATES = 500           # pratikte "tüm" USDT coinleri (hacim filtresi zaten eleyecek)
+REQUEST_SLEEP = 0.12             # get_klines sonrası ekstra bekleme (throttle'a ek güvenlik payı)
 MAX_RETRIES = 3
+MAX_WORKERS = 6                  # aynı anda kaç coin paralel analiz edilsin
 
 LONG_SIGNAL_THRESHOLD = 70
 SHORT_SIGNAL_THRESHOLD = 70
@@ -39,6 +42,24 @@ TOP_DUMP = 5
 
 
 # =========================================================
+# GLOBAL RATE LIMITER (paralel taramada Binance'ı yormamak için)
+# =========================================================
+
+_rate_lock = threading.Lock()
+_last_request_time = [0.0]
+MIN_REQUEST_INTERVAL = 0.15  # tüm thread'ler birlikte saniyede ~6-7 istekten hızlı gitmesin
+
+
+def _throttle():
+    with _rate_lock:
+        now = time.time()
+        wait = _last_request_time[0] + MIN_REQUEST_INTERVAL - now
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_time[0] = time.time()
+
+
+# =========================================================
 # HTTP (retry + backoff)
 # =========================================================
 
@@ -47,6 +68,7 @@ def get(url):
 
     for attempt in range(MAX_RETRIES):
         try:
+            _throttle()  # paralel thread'ler arasında ortak hız sınırı
             req = urllib.request.Request(
                 url,
                 headers={"User-Agent": "Mozilla/5.0"}
@@ -146,7 +168,6 @@ def get_klines(symbol, interval, limit=210):
 
     url = BINANCE + "/api/v3/klines?" + params
     data = get(url)
-    time.sleep(REQUEST_SLEEP)
 
     # Binance kline: [openTime, open, high, low, close, volume, closeTime, ...]
     now_ms = int(time.time() * 1000)
@@ -418,6 +439,71 @@ def vwap(high, low, close, volume, period=50):
         cum_v += volume[i]
 
     return cum_pv / cum_v if cum_v > 0 else close[-1]
+
+
+# =========================================================
+# CHAIKIN MONEY FLOW (CMF) — OBV'den bağımsız, hacim ağırlıklı
+# bir başka para akışı göstergesi
+# =========================================================
+
+def cmf(high, low, close, volume, period=20):
+    if len(close) < period:
+        return 0.0
+
+    mf_volumes = []
+    for i in range(len(close)):
+        hl_range = high[i] - low[i]
+        if hl_range == 0:
+            mf_multiplier = 0.0
+        else:
+            mf_multiplier = ((close[i] - low[i]) - (high[i] - close[i])) / hl_range
+        mf_volumes.append(mf_multiplier * volume[i])
+
+    recent_mfv = sum(mf_volumes[-period:])
+    recent_vol = sum(volume[-period:])
+
+    return recent_mfv / recent_vol if recent_vol > 0 else 0.0
+
+
+# =========================================================
+# KELTNER CHANNELS + SQUEEZE (Bollinger sıkışması)
+# =========================================================
+
+def keltner_channels(close, high, low, period=20, multiplier=1.5):
+    if len(close) < period:
+        return close[-1], close[-1], close[-1]
+
+    basis = ema(close, period)
+    atr_value = atr(high, low, close, period)
+
+    return basis + multiplier * atr_value, basis, basis - multiplier * atr_value
+
+
+def is_squeeze_on(close, high, low, period=20):
+    """
+    Bollinger Bantları, Keltner Kanalları'nın İÇİNDEYSE piyasa
+    'sıkışmış' demektir (düşük volatilite) — genelde büyük bir
+    hareketten hemen önce oluşur. Bu sıkışma bittiğinde (squeeze
+    release), hareket henüz YENİ başlamış olur — "Momentum" gibi
+    hareketin ortasında/sonunda yakalayan göstergelerin aksine.
+    """
+    upper_bb, _, lower_bb = bollinger(close, period)
+    upper_kc, _, lower_kc = keltner_channels(close, high, low, period)
+
+    return upper_bb < upper_kc and lower_bb > lower_kc
+
+
+def squeeze_just_released(close, high, low, period=20):
+    """
+    Bir önceki mumda sıkışma VARDI, şimdi YOK -> squeeze yeni bitti.
+    """
+    if len(close) < period + 2:
+        return False
+
+    was_squeezed = is_squeeze_on(close[:-1], high[:-1], low[:-1], period)
+    is_squeezed_now = is_squeeze_on(close, high, low, period)
+
+    return was_squeezed and not is_squeezed_now
 
 
 # =========================================================
@@ -705,6 +791,39 @@ def stablecoin_pair(symbol):
 
 
 # =========================================================
+# BTC PİYASA REJİMİ FİLTRESİ
+# =========================================================
+# Altcoinler büyük ölçüde BTC'yi takip eder. BTC net düşüş
+# trendindeyken altcoin LONG'ları, BTC net yükseliş trendindeyken
+# altcoin SHORT'ları istatistiksel olarak daha risklidir. Bu yüzden
+# sinyalleri BTC'nin genel 4h trendine göre filtreliyoruz.
+
+def btc_trend_from_close4h(close4h):
+    if len(close4h) < 55:
+        return "neutral"
+
+    e21 = ema(close4h, 21)
+    e50 = ema(close4h, 50)
+
+    if e21 > e50 * 1.002:
+        return "up"
+    if e21 < e50 * 0.998:
+        return "down"
+    return "neutral"
+
+
+def get_btc_market_regime():
+    try:
+        close4h, _, _, _ = get_klines("BTCUSDT", "4h")
+        regime = btc_trend_from_close4h(close4h)
+        print(f"₿ BTC piyasa rejimi: {regime}")
+        return regime
+    except Exception as e:
+        print("BTC rejim tespiti hatası:", e)
+        return "neutral"
+
+
+# =========================================================
 # ANALYSIS
 # =========================================================
 
@@ -769,6 +888,8 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         adx_value, plus_di, minus_di = adx_di(high15, low15, close15)
         current_vwap = vwap(high15, low15, close15, vol15)
         st_bullish = supertrend_bullish(high15, low15, close15)
+        cmf_value = cmf(high15, low15, close15, vol15)
+        squeeze_released = squeeze_just_released(close15, high15, low15)
 
         avg_volume = sum(vol15[-21:-1]) / 20
         if avg_volume <= 0:
@@ -815,6 +936,10 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             long_score += 11; long_reasons.append("ADX/DI")            # +0.09 -> artırıldı
         if st_bullish is True:
             long_score += 6; long_reasons.append("Supertrend")         # veri azdı, değiştirilmedi
+        if cmf_value > 0.05:
+            long_score += 5; long_reasons.append("CMF")                # YENİ, henüz test edilmedi
+        if squeeze_released and price > ema9:
+            long_score += 8; long_reasons.append("Squeeze Release")    # YENİ, henüz test edilmedi
 
         if volume_ratio >= 3: long_score += 10
         elif volume_ratio >= 2: long_score += 7
@@ -857,6 +982,10 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             short_score += 6; short_reasons.append("ADX/DI")           # hafif negatif -> azaltıldı
         if st_bullish is False:
             short_score += 6; short_reasons.append("Supertrend")       # veri azdı, değiştirilmedi
+        if cmf_value < -0.05:
+            short_score += 5; short_reasons.append("CMF")              # YENİ, henüz test edilmedi
+        if squeeze_released and price < ema9:
+            short_score += 8; short_reasons.append("Squeeze Release")  # YENİ, henüz test edilmedi
 
         if volume_ratio >= 3: short_score += 10
         elif volume_ratio >= 2: short_score += 7
@@ -1145,17 +1274,48 @@ def build_message(results):
 
 def scan_main():
     """Normal tarama: Binance'ı tarar, Telegram'a sinyal mesajı atar."""
-    print("🚀 GELİŞMİŞ BINANCE LONG + SHORT SCANNER (v2)")
+    print("🚀 GELİŞMİŞ BINANCE LONG + SHORT SCANNER (v3 - tüm coinler + BTC filtresi)")
+
+    btc_regime = get_btc_market_regime()
 
     candidates = get_candidates()
-    print(f"{len(candidates)} coin analiz edilecek.")
+    print(f"{len(candidates)} coin analiz edilecek (paralel, {MAX_WORKERS} thread).")
 
     results = []
-    for idx, (symbol, _) in enumerate(candidates, 1):
-        print(f"[{idx}/{len(candidates)}] Analiz: {symbol}")
-        result = analyze(symbol)
-        if result:
-            results.append(result)
+    completed = 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_symbol = {
+            executor.submit(analyze, symbol): symbol
+            for symbol, _ in candidates
+        }
+
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            completed += 1
+            symbol = future_to_symbol[future]
+            try:
+                result = future.result()
+            except Exception as e:
+                print(f"[{completed}/{len(candidates)}] {symbol}: hata - {e}")
+                continue
+
+            if completed % 20 == 0 or completed == len(candidates):
+                print(f"[{completed}/{len(candidates)}] işlendi...")
+
+            if result:
+                results.append(result)
+
+    # BTC rejim filtresi: BTC düşüşteyken LONG, BTC yükselişteyken SHORT
+    # sinyallerini eleyerek altcoin'lerin genel piyasaya karşı gitmesini
+    # engelliyoruz.
+    if btc_regime == "down":
+        for r in results:
+            if r["long_signal"]:
+                r["long_signal"] = None
+    elif btc_regime == "up":
+        for r in results:
+            if r["short_signal"]:
+                r["short_signal"] = None
 
     message = build_message(results)
     print(message)
@@ -1251,7 +1411,7 @@ def bt_simulate_outcome(direction, entry_price, sl, tp1, tp2, tp3,
     return "TIMEOUT", 0.0
 
 
-def bt_backtest_symbol(symbol, days):
+def bt_backtest_symbol(symbol, days, btc_close4h_full=None):
     print(f"\n📥 {symbol}: geçmiş veri çekiliyor ({days} gün)...")
 
     close15, high15, low15, vol15 = bt_fetch_full_klines(symbol, "15m", days)
@@ -1294,6 +1454,14 @@ def bt_backtest_symbol(symbol, days):
 
         if not result:
             continue
+
+        # BTC piyasa rejimi filtresi (canlı taramadaki mantığın aynısı)
+        if btc_close4h_full is not None:
+            btc_regime = btc_trend_from_close4h(btc_close4h_full[:n4h])
+            if btc_regime == "down" and result["long_signal"]:
+                result["long_signal"] = None
+            elif btc_regime == "up" and result["short_signal"]:
+                result["short_signal"] = None
 
         direction = None
         if result["long_signal"]:
@@ -1501,10 +1669,19 @@ def backtest_main(symbols_arg, days):
     symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
     print(f"🚀 Backtest başlıyor: {symbols} | {days} gün")
 
+    print("\n📥 BTC piyasa rejimi verisi çekiliyor (filtre için)...")
+    try:
+        btc_close15, _, _, _ = bt_fetch_full_klines("BTCUSDT", "15m", days)
+        btc_close4h_full = btc_close15[15::16]
+        print(f"✅ BTC: {len(btc_close4h_full)} adet 4h mum türetildi.")
+    except Exception as e:
+        print(f"⚠️ BTC verisi çekilemedi, rejim filtresi uygulanmayacak: {e}")
+        btc_close4h_full = None
+
     all_trades = []
     for symbol in symbols:
         try:
-            trades = bt_backtest_symbol(symbol, days)
+            trades = bt_backtest_symbol(symbol, days, btc_close4h_full)
             all_trades.extend(trades)
         except Exception as e:
             print(f"❌ {symbol} backtest hatası: {e}")
