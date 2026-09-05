@@ -35,6 +35,11 @@ MAX_WORKERS = 6                  # aynı anda kaç coin paralel analiz edilsin
 LONG_SIGNAL_THRESHOLD = 70
 SHORT_SIGNAL_THRESHOLD = 70
 
+# 15 coin / 610 sinyallik backtest'te SHORT sinyalleri net negatif çıktı
+# (NET R: -0.18), LONG ise net pozitifti (+0.01). Bunu tamamen kapatmak
+# istersen aşağıyı False yap — sadece LONG sinyalleri üretilir.
+ENABLE_SHORT_SIGNALS = True
+
 TOP_LONG = 3
 TOP_SHORT = 3
 TOP_PUMP = 5
@@ -591,7 +596,16 @@ def fresh_breakout(close, high, low, volume):
 # OVEREXTENSION
 # =========================================================
 
-def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower):
+def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower,
+                   rsi15=None, adx_value=None, volume_ratio=None):
+    """
+    Backtest'te bulduğumuz somut kanıta göre sıkılaştırıldı: en büyük
+    dump'ların hemen öncesinde RSI15 ~75+, ADX ~48+, hacim oranı ~2.3x
+    gibi "aşırı ısınmış" bir profil görülüyordu — üstelik bu profil
+    bizim eski LONG kriterlerimizden bile daha güçlü görünüyordu.
+    Bu yüzden ATR mesafesi eşiği düşürüldü (3 -> 2.5) ve RSI+ADX+hacim
+    birlikte aşırı yüksekken de aşırı uzamış sayılıyor.
+    """
     price = close[-1]
 
     if atr_value <= 0:
@@ -600,8 +614,17 @@ def overextension(close, atr_value, ema21, bollinger_upper, bollinger_lower):
     long_distance = (price - ema21) / atr_value
     short_distance = (ema21 - price) / atr_value
 
-    long_over = long_distance >= 3 or price > bollinger_upper
-    short_over = short_distance >= 3 or price < bollinger_lower
+    blow_off_top = (
+        rsi15 is not None and adx_value is not None and volume_ratio is not None
+        and rsi15 >= 72 and adx_value >= 40 and volume_ratio >= 2.0
+    )
+    blow_off_bottom = (
+        rsi15 is not None and adx_value is not None and volume_ratio is not None
+        and rsi15 <= 28 and adx_value >= 40 and volume_ratio >= 2.0
+    )
+
+    long_over = long_distance >= 2.5 or price > bollinger_upper or blow_off_top
+    short_over = short_distance >= 2.5 or price < bollinger_lower or blow_off_bottom
 
     return {
         "long": long_over,
@@ -904,101 +927,95 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         momentum_acceleration = momentum_info["acceleration"]
 
         # -------------------- LONG --------------------
-        # Ağırlıklar, backtest'te ölçülen gerçek etkiye göre ayarlandı
-        # (bkz. bt_reason_breakdown). Zararlı çıkan faktörlerin
-        # ağırlığı düşürüldü/kaldırıldı, faydalı çıkanlar güçlendirildi.
+        # Ağırlıklar bu turda 15 coin / 610 sinyallik en büyük ve en
+        # güvenilir örneklemdeki ölçümlere göre TOPLU olarak güncellendi.
         long_score = 0
         long_reasons = []
 
         if 50 <= rsi15 <= 68:
-            long_score += 9; long_reasons.append("RSI ideal")          # +0.05 -> artırıldı
+            long_score += 7; long_reasons.append("RSI ideal")          # -0.04 -> azaltıldı
         if 50 <= rsi1h <= 70:
-            long_score += 8; long_reasons.append("1h RSI")             # ~nötr
+            long_score += 8; long_reasons.append("1h RSI")             # +0.02
         if 45 <= rsi4h <= 70:
-            long_score += 9; long_reasons.append("4h RSI")             # +0.09 -> artırıldı
+            long_score += 10; long_reasons.append("4h RSI")            # +0.04 -> artırıldı
         if price > ema9 > ema21:
-            long_score += 8; long_reasons.append("15m EMA uptrend")    # hafif negatif -> azaltıldı
+            long_score += 8; long_reasons.append("15m EMA uptrend")    # nötr
         if price > ema50:
             long_score += 6; long_reasons.append("EMA50")              # nötr
         if price > ema21_4h and ema21_4h > ema50_4h:
-            long_score += 8; long_reasons.append("4h trend")           # hafif negatif -> azaltıldı
+            long_score += 10; long_reasons.append("4h trend")          # +0.06 -> artırıldı
         if macd1h > signal1h:
-            long_score += 6; long_reasons.append("1h MACD")            # hafif negatif -> azaltıldı
+            long_score += 5; long_reasons.append("1h MACD")            # hafif negatif -> azaltıldı
         if 20 <= stoch <= 80:
-            long_score += 2; long_reasons.append("Stoch RSI")          # -0.10 -> ciddi azaltıldı
+            long_score += 1; long_reasons.append("Stoch RSI")          # -0.07 -> azaltıldı
         if middle < price < upper:
             long_score += 4; long_reasons.append("Bollinger")          # nötr
         if obv_positive:
-            long_score += 9; long_reasons.append("OBV")                # +0.11 -> artırıldı (en iyi faktör)
+            long_score += 7; long_reasons.append("OBV")                # +0.01 (önceki turlarda daha güçlüydü, tutarsız -> orta seviye)
         if price > current_vwap:
             long_score += 6; long_reasons.append("VWAP")               # nötr
         if adx_value >= 25 and plus_di > minus_di:
-            long_score += 11; long_reasons.append("ADX/DI")            # +0.09 -> artırıldı
+            long_score += 8; long_reasons.append("ADX/DI")             # -0.03 -> azaltıldı
         if st_bullish is True:
             long_score += 6; long_reasons.append("Supertrend")         # veri azdı, değiştirilmedi
-        if cmf_value > 0.05:
-            long_score += 1; long_reasons.append("CMF")                # -0.16 ölçüldü (n=51) -> ciddi azaltıldı
-        # Squeeze Release, precursor analizinde 2h VE 8h ufuklarında
-        # tutarlı şekilde OLUMSUZ çıktı (fark: -0.13 / -0.14) ->
-        # puanlamadan tamamen çıkarıldı.
+        # CMF, LONG'da 3 ayrı backtest turunda da tutarlı şekilde
+        # OLUMSUZ çıktı (-0.16, -0.15, -0.05) -> puanlamadan çıkarıldı.
 
         if volume_ratio >= 3: long_score += 10
         elif volume_ratio >= 2: long_score += 7
         elif volume_ratio >= 1.5: long_score += 4
 
         if volume_acceleration >= 3:
-            long_score += 3; long_reasons.append("Volume Acceleration")  # ~nötr, hafif azaltıldı
+            long_score += 8; long_reasons.append("Volume Acceleration")  # +0.10 -> ciddi artırıldı (bu turun en iyi LONG faktörü)
         if 0.5 <= momentum <= 2.5:
-            long_score += 2; long_reasons.append("Momentum")             # -0.19 -> ciddi azaltıldı + aralık daraltıldı
-        # Momentum Acceleration LONG'da -0.50 etki ölçüldü (hem de en güçlü
-        # negatif bulgu) -> puanlamadan tamamen çıkarıldı.
+            long_score += 2; long_reasons.append("Momentum")             # -0.02, düşük tutuldu
+        # Momentum Acceleration LONG'da -0.50 etki ölçüldü -> puanlamadan çıkarıldı.
 
         # -------------------- SHORT --------------------
+        # SHORT tarafı genel olarak net negatif (-0.18 NET R) — ağırlıkları
+        # düzelttik ama temel edge LONG kadar güçlü değil, bunu bilerek kullan.
         short_score = 0
         short_reasons = []
 
         if 32 <= rsi15 <= 50:
-            short_score += 6; short_reasons.append("RSI weakness")     # hafif negatif -> azaltıldı
+            short_score += 3; short_reasons.append("RSI weakness")     # -0.10 -> ciddi azaltıldı
         if 30 <= rsi1h <= 50:
-            short_score += 8; short_reasons.append("1h RSI")           # nötr
+            short_score += 6; short_reasons.append("1h RSI")           # -0.02 -> azaltıldı
         if 30 <= rsi4h <= 55:
-            short_score += 8; short_reasons.append("4h RSI")           # +0.07 -> artırıldı
+            short_score += 8; short_reasons.append("4h RSI")           # nötr
         if price < ema9 < ema21:
-            short_score += 8; short_reasons.append("15m EMA downtrend")  # hafif negatif -> azaltıldı
+            short_score += 8; short_reasons.append("15m EMA downtrend")  # +0.01
         if price < ema50:
             short_score += 6; short_reasons.append("EMA50")            # nötr
         if price < ema21_4h and ema21_4h < ema50_4h:
-            short_score += 12; short_reasons.append("4h downtrend")    # +0.09 -> artırıldı
+            short_score += 12; short_reasons.append("4h downtrend")    # +0.01, iyi tutuldu
         if macd1h < signal1h:
-            short_score += 10; short_reasons.append("1h MACD")         # +0.10 -> artırıldı (en iyi faktör)
+            short_score += 10; short_reasons.append("1h MACD")         # +0.03, en iyi SHORT faktörlerinden
         if stoch < 80:
-            short_score += 4; short_reasons.append("Stoch RSI")        # hafif negatif -> azaltıldı
+            short_score += 4; short_reasons.append("Stoch RSI")        # nötr
         if lower < price < middle:
-            short_score += 3; short_reasons.append("Bollinger")        # hafif negatif -> azaltıldı
+            short_score += 2; short_reasons.append("Bollinger")        # -0.02 -> azaltıldı
         if not obv_positive:
-            short_score += 3; short_reasons.append("OBV")              # hafif negatif -> azaltıldı
+            short_score += 1; short_reasons.append("OBV")              # -0.04 -> azaltıldı
         if price < current_vwap:
             short_score += 6; short_reasons.append("VWAP")             # nötr
         if adx_value >= 25 and minus_di > plus_di:
-            short_score += 6; short_reasons.append("ADX/DI")           # hafif negatif -> azaltıldı
+            short_score += 5; short_reasons.append("ADX/DI")           # -0.01 -> hafif azaltıldı
         if st_bullish is False:
             short_score += 6; short_reasons.append("Supertrend")       # veri azdı, değiştirilmedi
         if cmf_value < -0.05:
-            short_score += 8; short_reasons.append("CMF")              # +0.08 ölçüldü (n=23) -> artırıldı
-        # Squeeze Release, precursor analizinde 2h VE 8h ufuklarında
-        # tutarlı şekilde OLUMSUZ çıktı (fark: -0.13 / -0.14) ->
-        # puanlamadan tamamen çıkarıldı.
+            short_score += 9; short_reasons.append("CMF")              # +0.03, en iyi SHORT faktörlerinden
 
         if volume_ratio >= 3: short_score += 10
         elif volume_ratio >= 2: short_score += 7
         elif volume_ratio >= 1.5: short_score += 4
 
         if volume_acceleration >= 3:
-            short_score += 3; short_reasons.append("Volume Acceleration")  # -0.17 -> azaltıldı
+            short_score += 1; short_reasons.append("Volume Acceleration")  # -0.11 -> ciddi azaltıldı
         if -5 <= momentum <= -0.5:
-            short_score += 9; short_reasons.append("Momentum")             # +0.09 -> artırıldı
-        # Momentum Acceleration SHORT'ta da -0.19 etki ölçüldü -> puanlamadan
-        # tamamen çıkarıldı (LONG ile aynı gerekçe).
+            short_score += 3; short_reasons.append("Momentum")             # ÖNCEKİ TURDA +0.09, BU TURDA -0.05
+            # -> işareti tutarsız, güvenilmez -> ağırlık ciddi düşürüldü
+        # Momentum Acceleration SHORT'ta da -0.19 etki ölçüldü -> çıkarıldı.
 
         # -------------------- FILTERS --------------------
         if volume_ratio < 1.3:
@@ -1010,7 +1027,10 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
         if stoch < 8:
             short_score -= 10
 
-        extension = overextension(close15, atr_value, ema21, upper, lower)
+        extension = overextension(
+            close15, atr_value, ema21, upper, lower,
+            rsi15=rsi15, adx_value=adx_value, volume_ratio=volume_ratio
+        )
         if extension["long"]:
             long_score -= 20
         if extension["short"]:
@@ -1041,7 +1061,8 @@ def analyze_core(symbol, close15, high15, low15, vol15, close1h, close4h):
             long_signal = "🟢 GÜÇLÜ AL"
 
         if (
-            short_score >= SHORT_SIGNAL_THRESHOLD
+            ENABLE_SHORT_SIGNALS
+            and short_score >= SHORT_SIGNAL_THRESHOLD
             and volume_ratio >= 1.5
             and adx_value >= 20
             and minus_di > plus_di
@@ -1676,7 +1697,8 @@ def backtest_main(symbols_arg, days, fee_pct=None):
 
     symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
     print(f"🚀 Backtest başlıyor: {symbols} | {days} gün | "
-          f"işlem maliyeti: %{BT_ROUNDTRIP_COST_PCT*100:.3f} (gidiş-dönüş)")
+          f"işlem maliyeti: %{BT_ROUNDTRIP_COST_PCT*100:.3f} (gidiş-dönüş) | "
+          f"paralel ({MAX_WORKERS} thread)")
 
     print("\n📥 BTC piyasa rejimi verisi çekiliyor (filtre için)...")
     try:
@@ -1688,12 +1710,20 @@ def backtest_main(symbols_arg, days, fee_pct=None):
         btc_close4h_full = None
 
     all_trades = []
-    for symbol in symbols:
-        try:
-            trades = bt_backtest_symbol(symbol, days, btc_close4h_full)
-            all_trades.extend(trades)
-        except Exception as e:
-            print(f"❌ {symbol} backtest hatası: {e}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_symbol = {
+            executor.submit(bt_backtest_symbol, symbol, days, btc_close4h_full): symbol
+            for symbol in symbols
+        }
+
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                trades = future.result()
+                all_trades.extend(trades)
+            except Exception as e:
+                print(f"❌ {symbol} backtest hatası: {e}")
 
     bt_print_summary(all_trades)
     bt_save_csv(all_trades)
@@ -1972,15 +2002,23 @@ def precursor_print_report(samples, lookahead_candles):
 def precursor_main(symbols_arg, days, lookahead_candles):
     symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
     print(f"🔬 Precursor analizi başlıyor: {symbols} | {days} gün | "
-          f"{lookahead_candles} mum ileri bakış")
+          f"{lookahead_candles} mum ileri bakış | paralel ({MAX_WORKERS} thread)")
 
     all_samples = []
-    for symbol in symbols:
-        try:
-            samples = collect_precursor_samples(symbol, days, lookahead_candles)
-            all_samples.extend(samples)
-        except Exception as e:
-            print(f"❌ {symbol} precursor hatası: {e}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_symbol = {
+            executor.submit(collect_precursor_samples, symbol, days, lookahead_candles): symbol
+            for symbol in symbols
+        }
+
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                samples = future.result()
+                all_samples.extend(samples)
+            except Exception as e:
+                print(f"❌ {symbol} precursor hatası: {e}")
 
     precursor_print_report(all_samples, lookahead_candles)
 
